@@ -1,13 +1,12 @@
 // src/screens/BrowseScreen.jsx
-// Browse screen now fetches movies from the backend instead of static mock data.
 import React, { useState } from 'react';
-import { Search, Star, Play, Plus } from 'lucide-react';
+import { Search, Star, Play, Plus, Film } from 'lucide-react';
 import { useFetch } from '../hooks/useFetch';
-import { moviesAPI } from '../services/api';
+import { moviesAPI, resolveAssetUrl } from '../services/api';
 
-export default function BrowseScreen({ onNavigate, onSelectMovie, onOpenCreateModal }) {
+export default function BrowseScreen({ onNavigate, onSelectMovie, onOpenCreateModal, onJoinRoom }) {
   // Data fetching
-  const { data: movies = [], loading: moviesLoading } = useFetch(() => moviesAPI.getAll());
+  const { data: movies = [], loading: moviesLoading, error: moviesError } = useFetch(() => moviesAPI.getAll());
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -16,7 +15,7 @@ export default function BrowseScreen({ onNavigate, onSelectMovie, onOpenCreateMo
   if (moviesLoading && moviesList.length === 0) {
     return (
       <div style={{ padding: '24px 36px', maxWidth: '1440px', margin: '0 auto' }}>
-        <p style={{ color: '#94a3b8' }}>Loading movies…</p>
+        <p style={{ color: '#94a3b8' }}>Loading movies from the server…</p>
       </div>
     );
   }
@@ -38,6 +37,7 @@ export default function BrowseScreen({ onNavigate, onSelectMovie, onOpenCreateMo
 
   return (
     <div style={{ padding: '24px 36px 80px', maxWidth: '1440px', margin: '0 auto' }}>
+      {moviesError && <p role="alert" style={{ color: '#fca5a5', marginBottom: '18px' }}>Could not load catalog: {moviesError.message}</p>}
       {/* Search Header */}
       <div style={{ marginBottom: '24px' }}>
         <div style={{ position: 'relative', maxWidth: '600px', margin: '0 0 20px 0' }}>
@@ -86,7 +86,7 @@ export default function BrowseScreen({ onNavigate, onSelectMovie, onOpenCreateMo
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '20px' }}>
         {filteredMovies.map((movie) => (
           <div
-            key={movie.id}
+            key={movie._id || movie.id || movie.slug}
             className="glass-card"
             style={{
               overflow: 'hidden',
@@ -111,8 +111,10 @@ export default function BrowseScreen({ onNavigate, onSelectMovie, onOpenCreateMo
           >
             {/* Poster */}
             <div style={{ position: 'relative', height: '290px' }}>
-              <img src={movie.poster} alt={movie.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              <div
+              {movie.poster
+                ? <img src={resolveAssetUrl(movie.poster)} alt={movie.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                : <div aria-hidden="true" style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,0.06)' }}><Film size={28} color="#94a3b8" /></div>}
+              {movie.rating !== undefined && movie.rating !== null && <div
                 style={{
                   position: 'absolute',
                   top: '10px',
@@ -131,7 +133,7 @@ export default function BrowseScreen({ onNavigate, onSelectMovie, onOpenCreateMo
               >
                 <Star size={13} fill="#facc15" color="#facc15" />
                 {movie.rating}
-              </div>
+              </div>}
 
               {/* Hover overlay */}
               <div
@@ -146,11 +148,11 @@ export default function BrowseScreen({ onNavigate, onSelectMovie, onOpenCreateMo
               >
                 <div style={{ width: '100%' }}>
                   <div style={{ fontSize: '0.75rem', color: '#a855f7', fontWeight: 600, textTransform: 'uppercase' }}>
-                    {movie.genres.join(' • ')}
+                    {(Array.isArray(movie.genres) ? movie.genres : []).join(' • ')}
                   </div>
                   <h4 style={{ fontSize: '1rem', fontWeight: 700, color: '#ffffff', marginTop: '2px' }}>{movie.title}</h4>
                   <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '2px' }}>
-                    {movie.year} • {movie.duration}
+                    {[movie.year, movie.duration].filter(Boolean).join(' • ')}
                   </div>
                 </div>
               </div>
@@ -162,6 +164,7 @@ export default function BrowseScreen({ onNavigate, onSelectMovie, onOpenCreateMo
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelectMovie(movie);
+                  onJoinRoom?.(null);
                   onNavigate('watch-room');
                 }}
                 className="btn btn-primary btn-sm"
@@ -183,6 +186,11 @@ export default function BrowseScreen({ onNavigate, onSelectMovie, onOpenCreateMo
             </div>
           </div>
         ))}
+        {!moviesLoading && !moviesError && filteredMovies.length === 0 && (
+          <p style={{ gridColumn: '1 / -1', padding: '24px', textAlign: 'center', color: '#94a3b8' }}>
+            No catalog titles match this search and filter.
+          </p>
+        )}
       </div>
     </div>
   );

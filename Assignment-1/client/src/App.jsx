@@ -56,6 +56,8 @@ export default function App() {
         if (u) {
           handleUserUpdated(u);
         }
+      }).catch((error) => {
+        console.error('[App] Could not refresh the signed-in profile:', error.message);
       });
     }
 
@@ -125,6 +127,7 @@ export default function App() {
             onNavigate={navigate}
             onSelectMovie={setSelectedMovie}
             onOpenCreateModal={() => setIsCreateModalOpen(true)}
+            onJoinRoom={(code) => setRoomCode(code)}
           />
         );
       
@@ -134,6 +137,7 @@ export default function App() {
             movie={selectedMovie}
             onNavigate={navigate}
             onOpenCreateModal={() => setIsCreateModalOpen(true)}
+            onJoinRoom={(code) => setRoomCode(code)}
           />
         );
       
@@ -189,7 +193,7 @@ export default function App() {
           <RecommendationsScreen
             onNavigate={navigate}
             onSelectMovie={setSelectedMovie}
-            onOpenCreateModal={() => setIsCreateModalOpen(true)}
+            onJoinRoom={(code) => setRoomCode(code)}
           />
         );
       
@@ -229,7 +233,7 @@ export default function App() {
         );
       
       case 'ai-expanded':
-        return <AICoPilotExpandedScreen onNavigate={navigate} />;
+        return <AICoPilotExpandedScreen onNavigate={navigate} movie={selectedMovie} roomCode={roomCode} />;
       
       case 'admin-timeline':
         return (

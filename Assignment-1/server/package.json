@@ -12,6 +12,9 @@
     "test:auth": "node test-auth-security.js",
     "test:analytics": "node test-session-analytics.js",
     "test:socket": "node test-socket-moderation.js",
+    "test:variations": "node test-timeline-variations.js",
+    "test:subtitle-upload": "node test-subtitle-upload.js",
+    "test:movie-upload": "node test-movie-upload.js",
     "test:playback": "node test-playback-state-machine.js",
     "test:ai": "node test-ai-grounding.js",
     "test:ai-provider": "node test-ai-provider.js",
@@ -37,6 +40,7 @@
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.9.2",
+    "multer": "^2.5.0",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {

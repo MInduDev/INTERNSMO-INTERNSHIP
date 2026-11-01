@@ -1,18 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { User, Clock, Users, HelpCircle, Edit3, Settings, Sparkles, Film, ArrowRight, LogOut, X, Check, Camera, Upload, Plus, Shield, LayoutGrid } from 'lucide-react';
 import { useFetch } from '../hooks/useFetch';
-import { authAPI, moviesAPI } from '../services/api';
+import { authAPI, interactionsAPI, moviesAPI, resolveAssetUrl } from '../services/api';
 import SettingsScreen from './SettingsScreen';
 import AdminTimelineScreen from './AdminTimelineScreen';
-
-const PRESET_AVATARS = [
-  'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=200&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=200&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80'
-];
 
 const AVAILABLE_GENRES = [
   'Sci-Fi', 'Action', 'Drama', 'Thriller', 'Adventure', 
@@ -20,8 +11,9 @@ const AVAILABLE_GENRES = [
 ];
 
 export default function ProfileScreen({ initialTab = 'overview', onNavigate, onSelectMovie, currentUser, onUserUpdated }) {
-  const { data: profileData, loading: profileLoading } = useFetch(() => authAPI.getMe());
-  const { data: moviesData, loading: moviesLoading } = useFetch(() => moviesAPI.getAll());
+  const { data: profileData, loading: profileLoading, error: profileError } = useFetch(() => authAPI.getMe());
+  const { data: moviesData = [], loading: moviesLoading, error: moviesError } = useFetch(() => moviesAPI.getAll());
+  const { data: historyData = [], loading: historyLoading, error: historyError } = useFetch(() => interactionsAPI.getMyHistory());
 
   const [activeTab, setActiveTab] = useState(initialTab);
 
@@ -36,47 +28,29 @@ export default function ProfileScreen({ initialTab = 'overview', onNavigate, onS
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [editName, setEditName] = useState('');
   const [editAvatar, setEditAvatar] = useState('');
-  const [editSubtitleLanguage, setEditSubtitleLanguage] = useState('English');
+  const [editSubtitleLanguage, setEditSubtitleLanguage] = useState('');
   const [editGenres, setEditGenres] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState({ text: '', type: '' });
 
-  const storedUser = React.useMemo(() => {
-    try {
-      return JSON.parse(localStorage.getItem('user') || 'null');
-    } catch {
-      return null;
-    }
-  }, []);
-
-  const activeUser = localUserOverride || currentUser || (profileData?.email ? profileData : profileData?.user) || storedUser;
+  const freshProfile = profileData?.email ? profileData : profileData?.user;
+  const activeUser = localUserOverride || freshProfile || (profileLoading ? currentUser : null);
 
   React.useEffect(() => {
-    const freshUser = profileData?.email ? profileData : profileData?.user;
-    if (freshUser && !localUserOverride) {
-      localStorage.setItem('user', JSON.stringify(freshUser));
+    if (freshProfile && !localUserOverride) {
+      localStorage.setItem('user', JSON.stringify(freshProfile));
     }
-  }, [profileData, localUserOverride]);
+  }, [freshProfile, localUserOverride]);
 
-  const user = {
-    name: activeUser?.name || 'Guest User',
-    email: activeUser?.email || 'guest@watchspace.tv',
-    role: activeUser?.role || 'Viewer',
-    avatar: activeUser?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
-    stats: activeUser?.stats || { watchSpaces: 0, watchTime: '0h', aiQuestions: 0 },
-    genres: (activeUser?.genres && activeUser.genres.length > 0) ? activeUser.genres : ['Sci-Fi', 'Action', 'Drama'],
-    interests: (activeUser?.interests && activeUser.interests.length > 0) ? activeUser.interests : ['Film Scoring', 'Cinematography', 'Directing'],
-    subtitleLanguage: activeUser?.subtitleLanguage || 'English',
-    createdAt: activeUser?.createdAt
-  };
+  const user = activeUser || {};
 
   const isAdmin = (user.role?.toLowerCase() === 'admin') || (currentUser?.role?.toLowerCase() === 'admin');
 
   const handleOpenEdit = () => {
-    setEditName(user.name);
-    setEditAvatar(user.avatar);
-    setEditSubtitleLanguage(user.subtitleLanguage || 'English');
-    setEditGenres(user.genres || ['Sci-Fi', 'Action', 'Drama']);
+    setEditName(user.name || '');
+    setEditAvatar(user.avatar || '');
+    setEditSubtitleLanguage(user.subtitleLanguage || '');
+    setEditGenres(Array.isArray(user.genres) ? user.genres : []);
     setStatusMsg({ text: '', type: '' });
     setIsEditOpen(true);
   };
@@ -154,7 +128,7 @@ export default function ProfileScreen({ initialTab = 'overview', onNavigate, onS
     try {
       const payload = {
         name: editName.trim(),
-        avatar: editAvatar.trim() || user.avatar,
+        avatar: editAvatar.trim(),
         subtitleLanguage: editSubtitleLanguage,
         genres: editGenres
       };
@@ -182,15 +156,17 @@ export default function ProfileScreen({ initialTab = 'overview', onNavigate, onS
   };
 
   const movies = Array.isArray(moviesData) ? moviesData : (moviesData?.movies || []);
-
-  const recentActivity = movies.slice(0, 3).map((m, idx) => ({
-    id: m.id || m._id || m.slug,
-    movie: m,
-    title: m.title,
-    duration: m.duration ? `${m.duration} watched` : '2h 15m watched',
-    date: idx === 0 ? 'Yesterday' : idx === 1 ? '3 days ago' : 'Last week',
-    poster: m.poster
-  }));
+  const recentActivity = (Array.isArray(historyData) ? historyData : []).map(interaction => {
+    const movie = movies.find(item => item.slug === interaction.titleId);
+    return {
+      id: interaction._id || `${interaction.titleId}-${interaction.updatedAt || ''}`,
+      movie,
+      title: movie?.title || interaction.titleId,
+      watched: `${Math.floor(Number(interaction.watchedSeconds || 0) / 60)} min watched`,
+      date: interaction.updatedAt ? new Date(interaction.updatedAt).toLocaleString() : 'Date not recorded',
+      poster: movie?.poster
+    };
+  });
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -201,6 +177,7 @@ export default function ProfileScreen({ initialTab = 'overview', onNavigate, onS
 
   return (
     <div className="profile-screen" style={{ padding: '24px 36px 80px', maxWidth: '1440px', margin: '0 auto' }}>
+      {profileError && <p role="alert" style={{ color: '#fca5a5', marginBottom: '16px' }}>Could not load profile from the server: {profileError.message}</p>}
       {/* User Header Profile Card */}
       <div className="glass-card profile-header" style={{
         padding: '32px',
@@ -210,26 +187,18 @@ export default function ProfileScreen({ initialTab = 'overview', onNavigate, onS
         marginBottom: '28px'
       }}>
         <div className="profile-identity" style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
-          <img
-            src={user.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80'}
-            alt={user.name}
-            style={{
-              width: '90px',
-              height: '90px',
-              borderRadius: '50%',
-              objectFit: 'cover',
-              border: '3px solid #6366f1',
-              boxShadow: '0 0 20px rgba(99, 102, 241, 0.4)'
-            }}
-          />
+          {user.avatar
+            ? <img src={user.avatar} alt={user.name || ''} style={{ width: '90px', height: '90px', borderRadius: '50%', objectFit: 'cover', border: '3px solid #6366f1' }} />
+            : <div aria-label={user.name || 'Profile'} style={{ width: '90px', height: '90px', borderRadius: '50%', display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,0.08)', border: '3px solid #6366f1', fontSize: '2rem' }}>{user.name?.charAt(0)?.toUpperCase() || '?'}</div>}
 
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <h2 style={{ fontSize: '1.6rem', fontWeight: 800 }}>{user.name}</h2>
-              <span className="badge badge-ai">{user.role || 'Host & Viewer'}</span>
+              <h2 style={{ fontSize: '1.6rem', fontWeight: 800 }}>{user.name || (profileLoading ? 'Loading profile…' : 'Profile data unavailable')}</h2>
+              <span className="badge badge-ai">{user.role || 'Role not reported'}</span>
             </div>
             <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: '2px' }}>
-              @{user.email ? user.email.split('@')[0] : 'viewer'} • Member since {user.createdAt ? new Date(user.createdAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : 'Jan 2026'}
+              {user.email ? `@${user.email.split('@')[0]}` : 'Email not available'}
+              {user.createdAt ? ` • Member since ${new Date(user.createdAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}` : ''}
             </div>
           </div>
         </div>
@@ -292,17 +261,17 @@ export default function ProfileScreen({ initialTab = 'overview', onNavigate, onS
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', textAlign: 'center' }}>
               <div style={{ background: 'rgba(255,255,255,0.03)', padding: '12px', borderRadius: '8px' }}>
                 <Users size={16} color="#ff2a54" style={{ margin: '0 auto 6px' }} />
-                <div style={{ fontSize: '1.3rem', fontWeight: 800 }}>{user.stats?.watchSpaces ?? 0}</div>
-                <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Watch Spaces</div>
+                <div style={{ fontSize: '1.3rem', fontWeight: 800 }}>{user.stats?.watchSpaces ?? '—'}</div>
+                <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Titles Completed</div>
               </div>
               <div style={{ background: 'rgba(255,255,255,0.03)', padding: '12px', borderRadius: '8px' }}>
                 <Clock size={16} color="#38bdf8" style={{ margin: '0 auto 6px' }} />
-                <div style={{ fontSize: '1.3rem', fontWeight: 800 }}>{user.stats?.watchTime ?? '0h'}</div>
+                <div style={{ fontSize: '1.3rem', fontWeight: 800 }}>{user.stats?.watchTime ?? '—'}</div>
                 <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Watch Time</div>
               </div>
               <div style={{ background: 'rgba(255,255,255,0.03)', padding: '12px', borderRadius: '8px' }}>
                 <HelpCircle size={16} color="#a855f7" style={{ margin: '0 auto 6px' }} />
-                <div style={{ fontSize: '1.3rem', fontWeight: 800 }}>{user.stats?.aiQuestions ?? 0}</div>
+                <div style={{ fontSize: '1.3rem', fontWeight: 800 }}>{user.stats?.aiQuestions ?? '—'}</div>
                 <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>AI Questions</div>
               </div>
             </div>
@@ -315,27 +284,29 @@ export default function ProfileScreen({ initialTab = 'overview', onNavigate, onS
             <div style={{ marginBottom: '14px' }}>
               <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '8px' }}>Favorite Genres</div>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                {(user.genres || ['Sci-Fi', 'Action']).map((g) => (
+                {(Array.isArray(user.genres) ? user.genres : []).map((g) => (
                   <span key={g} className="badge badge-pill" style={{ padding: '6px 12px' }}>
                     {g}
                   </span>
                 ))}
+                {(!Array.isArray(user.genres) || user.genres.length === 0) && <span style={{ color: '#94a3b8', fontSize: '0.82rem' }}>No genres saved.</span>}
               </div>
             </div>
 
             <div style={{ marginBottom: '14px' }}>
               <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '4px' }}>Preferred Subtitle Language</div>
-              <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{user.subtitleLanguage || 'English'}</div>
+              <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{user.subtitleLanguage || 'Not set'}</div>
             </div>
 
             <div>
               <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '8px' }}>Interests</div>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                {(user.interests || ['Film Scoring', 'Cinematography']).map((it) => (
+                {(Array.isArray(user.interests) ? user.interests : []).map((it) => (
                   <span key={it} className="badge badge-ai" style={{ padding: '4px 10px' }}>
                     {it}
                   </span>
                 ))}
+                {(!Array.isArray(user.interests) || user.interests.length === 0) && <span style={{ color: '#94a3b8', fontSize: '0.82rem' }}>No interests saved.</span>}
               </div>
             </div>
           </div>
@@ -349,6 +320,12 @@ export default function ProfileScreen({ initialTab = 'overview', onNavigate, onS
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            {historyError && <p role="alert" style={{ color: '#fca5a5' }}>Could not load watch history: {historyError.message}</p>}
+            {moviesError && <p role="alert" style={{ color: '#fca5a5' }}>Could not load movie details: {moviesError.message}</p>}
+            {(historyLoading || moviesLoading) && <p style={{ color: '#94a3b8' }}>Loading watch history…</p>}
+            {!historyLoading && !historyError && recentActivity.length === 0 && (
+              <p style={{ color: '#94a3b8' }}>The server returned no watch history for this account.</p>
+            )}
             {recentActivity.map((act) => (
               <div
                 key={act.id}
@@ -364,19 +341,16 @@ export default function ProfileScreen({ initialTab = 'overview', onNavigate, onS
                 }}
               >
                 <div className="profile-activity-info" style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                  <img
-                    src={act.poster}
-                    alt={act.title}
-                    style={{ width: '48px', height: '64px', borderRadius: '6px', objectFit: 'cover' }}
-                  />
+                  {act.poster && <img src={resolveAssetUrl(act.poster)} alt={act.title} style={{ width: '48px', height: '64px', borderRadius: '6px', objectFit: 'cover' }} />}
                   <div>
                     <h5 style={{ fontSize: '0.95rem', fontWeight: 700 }}>{act.title}</h5>
-                    <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginTop: '2px' }}>{act.duration}</div>
+                    <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginTop: '2px' }}>{act.watched}</div>
                     <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '2px' }}>{act.date}</div>
                   </div>
                 </div>
 
                 <button
+                  disabled={!act.movie}
                   onClick={() => {
                     if (onSelectMovie) onSelectMovie(act.movie);
                     onNavigate('watch-room');
@@ -499,31 +473,7 @@ export default function ProfileScreen({ initialTab = 'overview', onNavigate, onS
 
                 {/* Avatar Circles Row with "+" Button at the end */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '14px' }}>
-                  {PRESET_AVATARS.map((avUrl, i) => {
-                    const isSelected = editAvatar === avUrl;
-                    return (
-                      <img
-                        key={i}
-                        src={avUrl}
-                        alt={`Preset ${i + 1}`}
-                        onClick={() => setEditAvatar(avUrl)}
-                        style={{
-                          width: '44px',
-                          height: '44px',
-                          borderRadius: '50%',
-                          objectFit: 'cover',
-                          cursor: 'pointer',
-                          border: isSelected ? '2.5px solid #ff2a54' : '2px solid rgba(255, 255, 255, 0.15)',
-                          transform: isSelected ? 'scale(1.12)' : 'scale(1)',
-                          boxShadow: isSelected ? '0 0 14px rgba(255, 42, 84, 0.55)' : 'none',
-                          transition: 'all 0.18s ease'
-                        }}
-                      />
-                    );
-                  })}
-
-                  {/* If user uploaded or entered a custom avatar outside the presets, show it here */}
-                  {editAvatar && !PRESET_AVATARS.includes(editAvatar) && (
+                  {editAvatar && (
                     <img
                       src={editAvatar}
                       alt="Custom Upload"
@@ -615,6 +565,7 @@ export default function ProfileScreen({ initialTab = 'overview', onNavigate, onS
                   className="input-field"
                   style={{ cursor: 'pointer' }}
                 >
+                  <option value="">No preference set</option>
                   <option value="English">English</option>
                   <option value="Spanish">Spanish</option>
                   <option value="French">French</option>

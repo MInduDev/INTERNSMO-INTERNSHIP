@@ -5,6 +5,7 @@ const express = require('express');
 const router = express.Router();
 const aiService = require('../services/aiService');
 const WatchSpace = require('../models/WatchSpace');
+const User = require('../models/User');
 const { protect } = require('../middleware/auth');
 
 // Sanitize and validate question input
@@ -44,12 +45,18 @@ router.post('/ask', protect, async (req, res) => {
       }
     }
 
+    const resolvedMovieId = sanitizeQuestion(space?.movie?.slug || movieId || '').slice(0, 100);
+    if (!resolvedMovieId) {
+      return res.status(400).json({ success: false, message: 'Select a catalog title before asking a title-specific question.' });
+    }
+
     const result = await aiService.askQuestion({
-      movieId: sanitizeQuestion(space?.movie?.slug || movieId || 'dune').slice(0, 100),
+      movieId: resolvedMovieId,
       currentTimestamp: timestamp,
       question,
       coPilotLevel: coPilotLevel || 'Normal'
     });
+    await User.updateOne({ _id: req.user._id }, { $inc: { 'stats.aiQuestions': 1 } });
     if (space) {
       await WatchSpace.updateOne(
         { _id: space._id },

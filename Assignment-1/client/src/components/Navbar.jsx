@@ -1,7 +1,5 @@
 import React from 'react';
 import { Sparkles, Search, Bell, Plus, Shield, User, LogIn, Settings } from 'lucide-react';
-import { useFetch } from '../hooks/useFetch';
-import { authAPI } from '../services/api';
 
 export default function Navbar({ currentScreen, onNavigate, onOpenCreateModal, currentUser }) {
   const [activeUser, setActiveUser] = React.useState(currentUser);
@@ -212,12 +210,10 @@ export default function Navbar({ currentScreen, onNavigate, onOpenCreateModal, c
               border: currentScreen === 'profile' ? '1px solid #6366f1' : '1px solid transparent'
             }}
           >
-            <img
-              src={user.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80'}
-              alt={user.name || 'User'}
-              style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover' }}
-            />
-            <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{user.name || 'User'}</span>
+            {user.avatar
+              ? <img src={user.avatar} alt={user.name || ''} style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover' }} />
+              : <span aria-hidden="true" style={{ width: '28px', height: '28px', borderRadius: '50%', display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,0.08)' }}>{user.name?.charAt(0)?.toUpperCase() || '?'}</span>}
+            <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{user.name || user.email || 'Profile'}</span>
           </div>
         ) : (
           <button

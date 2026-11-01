@@ -5,14 +5,7 @@ import {
   X, RefreshCw, Power, Check, Radio, Settings
 } from 'lucide-react';
 import { useFetch } from '../hooks/useFetch';
-import { moviesAPI, timelineAPI, spacesAPI, adminAPI } from '../services/api';
-
-const SAMPLE_POSTERS = [
-  { label: 'Sci-Fi Neon', url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=500&auto=format&fit=crop&q=80' },
-  { label: 'Cosmic Galaxy', url: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=500&auto=format&fit=crop&q=80' },
-  { label: 'Action Night', url: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=500&auto=format&fit=crop&q=80' },
-  { label: 'Ancient Fantasy', url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=500&auto=format&fit=crop&q=80' }
-];
+import { moviesAPI, resolveAssetUrl, timelineAPI, spacesAPI, adminAPI } from '../services/api';
 
 export default function AdminTimelineScreen({ onNavigate, currentUser, embedded = false }) {
   const resolvedUser = currentUser || (() => {
@@ -27,19 +20,28 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
 
   // State
   const [events, setEvents] = useState([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsError, setEventsError] = useState('');
   const [selectedMovie, setSelectedMovie] = useState('');
   const [eventType, setEventType] = useState('Trivia');
-  const [timestamp, setTimestamp] = useState('00:05:30');
+  const [timestamp, setTimestamp] = useState('');
   const [content, setContent] = useState('');
   const [variationOptionsInput, setVariationOptionsInput] = useState('');
+  const [subtitleOptionLabel, setSubtitleOptionLabel] = useState('');
+  const [subtitleLanguage, setSubtitleLanguage] = useState('en');
+  const [subtitleFile, setSubtitleFile] = useState(null);
+  const [subtitleUploadLoading, setSubtitleUploadLoading] = useState(false);
+  const subtitleFileInputRef = useRef(null);
   const [saveStatus, setSaveStatus] = useState(null);
   const [activeAdminTab, setActiveAdminTab] = useState('timeline');
 
   // Real data state
   const [usersList, setUsersList] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [usersError, setUsersError] = useState('');
   const [spacesList, setSpacesList] = useState([]);
   const [spacesLoading, setSpacesLoading] = useState(false);
+  const [spacesError, setSpacesError] = useState('');
   const [actionNotice, setActionNotice] = useState(null);
   const actionNoticeTimeoutRef = useRef(null);
 
@@ -53,24 +55,28 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
   // Dynamic Movies Catalog state & CRUD
   const [moviesList, setMoviesList] = useState([]);
   const [moviesLoading, setMoviesLoading] = useState(false);
+  const [moviesError, setMoviesError] = useState('');
+  const activeSpaces = spacesList.filter((space) => ['active', 'lobby'].includes(space.status));
 
   // Add Movie Modal State
   const [isAddMovieModalOpen, setIsAddMovieModalOpen] = useState(false);
   const [newMovieTitle, setNewMovieTitle] = useState('');
-  const [newMovieYear, setNewMovieYear] = useState('2026');
-  const [newMovieDuration, setNewMovieDuration] = useState('2h 15m');
-  const [newMovieRating, setNewMovieRating] = useState('8.5');
-  const [newMovieGenres, setNewMovieGenres] = useState('Sci-Fi, Action');
+  const [newMovieYear, setNewMovieYear] = useState('');
+  const [newMovieDuration, setNewMovieDuration] = useState('');
+  const [newMovieRating, setNewMovieRating] = useState('');
+  const [newMovieGenres, setNewMovieGenres] = useState('');
   const [newMovieDirector, setNewMovieDirector] = useState('');
   const [newMovieCast, setNewMovieCast] = useState('');
   const [newMovieDescription, setNewMovieDescription] = useState('');
-  const [newMoviePoster, setNewMoviePoster] = useState('');
-  const [newMovieBackdrop, setNewMovieBackdrop] = useState('');
-  const [newMovieVideoUrl, setNewMovieVideoUrl] = useState('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4');
+  const [newMoviePosterFile, setNewMoviePosterFile] = useState(null);
+  const [newMovieVideoFile, setNewMovieVideoFile] = useState(null);
   const [isAddingMovie, setIsAddingMovie] = useState(false);
   const [addMovieError, setAddMovieError] = useState('');
+  const moviePosterInputRef = useRef(null);
+  const movieVideoInputRef = useRef(null);
 
   const fetchMovies = useCallback(async () => {
+    setMoviesError('');
     try {
       setMoviesLoading(true);
       const res = await moviesAPI.getAll();
@@ -78,7 +84,8 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
       setMoviesList(list);
       return list;
     } catch (err) {
-      console.warn('Failed to fetch movies:', err);
+      setMoviesList([]);
+      setMoviesError(err.message || 'Could not load catalog titles.');
       return [];
     } finally {
       setMoviesLoading(false);
@@ -92,7 +99,7 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
   // Set initial selected movie once movies load
   useEffect(() => {
     if (moviesList.length > 0 && !selectedMovie) {
-      setSelectedMovie(moviesList[0].slug || moviesList[0].id || 'the-dark-knight');
+      setSelectedMovie(moviesList[0].slug || moviesList[0].id || moviesList[0]._id);
     }
   }, [moviesList, selectedMovie]);
 
@@ -107,7 +114,14 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
       return;
     }
 
-    const posterUrl = newMoviePoster.trim() || SAMPLE_POSTERS[0].url;
+    if (!newMoviePosterFile) {
+      setAddMovieError('Choose a poster image file.');
+      return;
+    }
+    if (!newMovieVideoFile) {
+      setAddMovieError('Choose an MP4 or WebM movie file.');
+      return;
+    }
 
     setIsAddingMovie(true);
     setAddMovieError('');
@@ -124,19 +138,16 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
 
       const payload = {
         title: newMovieTitle.trim(),
-        year: newMovieYear.trim() || '2026',
-        duration: newMovieDuration.trim() || '2h 00m',
-        rating: parseFloat(newMovieRating) || 8.0,
-        genres: genresArray.length > 0 ? genresArray : ['Sci-Fi'],
-        director: newMovieDirector.trim() || 'Unknown',
-        cast: castArray.length > 0 ? castArray : ['Lead Actor'],
-        description: newMovieDescription.trim(),
-        poster: posterUrl,
-        backdrop: newMovieBackdrop.trim() || posterUrl,
-        videoAssetUrl: newMovieVideoUrl.trim() || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'
+        ...(newMovieYear.trim() ? { year: newMovieYear.trim() } : {}),
+        ...(newMovieDuration.trim() ? { duration: newMovieDuration.trim() } : {}),
+        ...(newMovieRating.trim() ? { rating: Number(newMovieRating) } : {}),
+        genres: genresArray,
+        ...(newMovieDirector.trim() ? { director: newMovieDirector.trim() } : {}),
+        cast: castArray,
+        description: newMovieDescription.trim()
       };
 
-      const res = await moviesAPI.create(payload);
+      const res = await moviesAPI.create(payload, newMoviePosterFile, newMovieVideoFile);
       if (res?.success || res?.movie) {
         if (actionNoticeTimeoutRef.current) clearTimeout(actionNoticeTimeoutRef.current);
         setActionNotice({ message: `"${payload.title}" added to movie catalog!`, isError: false });
@@ -144,12 +155,18 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
 
         setIsAddMovieModalOpen(false);
         setNewMovieTitle('');
+        setNewMovieYear('');
+        setNewMovieDuration('');
+        setNewMovieRating('');
+        setNewMovieGenres('');
         setNewMovieDirector('');
         setNewMovieCast('');
         setNewMovieDescription('');
-        setNewMoviePoster('');
-        setNewMovieBackdrop('');
-        const updated = await fetchMovies();
+        setNewMoviePosterFile(null);
+        setNewMovieVideoFile(null);
+        if (moviePosterInputRef.current) moviePosterInputRef.current.value = '';
+        if (movieVideoInputRef.current) movieVideoInputRef.current.value = '';
+        await fetchMovies();
         if (res?.movie?.slug) {
           setSelectedMovie(res.movie.slug);
         }
@@ -194,16 +211,26 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
 
   // Fetch timeline events for selected movie
   const fetchTimelineEvents = useCallback(async () => {
-    if (!selectedMovie) return;
+    setEventsError('');
+    if (!selectedMovie) {
+      setEvents([]);
+      return;
+    }
     try {
+      setEventsLoading(true);
       const res = await timelineAPI.getByMovie(selectedMovie);
       if (Array.isArray(res)) {
         setEvents(res);
       } else if (res?.events) {
         setEvents(res.events);
+      } else {
+        throw new Error('The timeline endpoint returned an unexpected response.');
       }
     } catch (err) {
-      console.warn('Failed to load timeline events:', err);
+      setEvents([]);
+      setEventsError(err.message || 'Could not load timeline markers.');
+    } finally {
+      setEventsLoading(false);
     }
   }, [selectedMovie]);
 
@@ -214,11 +241,13 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
   // Fetch real users from MongoDB
   const fetchUsers = useCallback(async () => {
     setUsersLoading(true);
+    setUsersError('');
     try {
       const users = await adminAPI.getUsers();
       setUsersList(users);
     } catch (err) {
-      console.warn('Failed to fetch admin users:', err);
+      setUsersList([]);
+      setUsersError(err.message || 'Could not load users.');
     } finally {
       setUsersLoading(false);
     }
@@ -227,11 +256,13 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
   // Fetch real watch spaces from MongoDB
   const fetchSpaces = useCallback(async () => {
     setSpacesLoading(true);
+    setSpacesError('');
     try {
       const spaces = await adminAPI.getSpaces();
       setSpacesList(spaces);
     } catch (err) {
-      console.warn('Failed to fetch spaces:', err);
+      setSpacesList([]);
+      setSpacesError(err.message || 'Could not load Watch Spaces.');
     } finally {
       setSpacesLoading(false);
     }
@@ -259,20 +290,92 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
     setTimeout(() => setActionNotice(null), 3500);
   };
 
+  const handleUploadSubtitleOption = async () => {
+    const label = subtitleOptionLabel.trim();
+    const languageCode = subtitleLanguage.trim();
+    if (!label || !subtitleFile || !/^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/.test(languageCode)) {
+      notifyAction('Enter an option label, language code, and choose a .vtt file.', true);
+      return;
+    }
+
+    let options = [];
+    const input = variationOptionsInput.trim();
+    if (input) {
+      try {
+        if (input.startsWith('[')) {
+          options = JSON.parse(input);
+        } else if (input.startsWith('{')) {
+          notifyAction('Variation options must be a JSON array.', true);
+          return;
+        } else {
+          options = input.split(',').map(option => option.trim()).filter(Boolean)
+            .map((optionLabel, index) => ({ id: `opt-${index + 1}`, label: optionLabel }));
+        }
+      } catch (_error) {
+        notifyAction('Fix the variation options JSON before uploading a subtitle option.', true);
+        return;
+      }
+    }
+    if (!Array.isArray(options) || options.length >= 4 ||
+        options.some(option => !option || (typeof option !== 'string' && typeof option !== 'object'))) {
+      notifyAction('Variation polls require 2–4 valid options; no more than four can be added.', true);
+      return;
+    }
+
+    setSubtitleUploadLoading(true);
+    try {
+      const response = await timelineAPI.uploadSubtitle(subtitleFile, languageCode);
+      options.push({
+        id: `subtitle-${Date.now()}`,
+        label,
+        assetType: 'subtitle',
+        subtitleUrl: response.asset.url,
+        language: response.asset.language
+      });
+      setVariationOptionsInput(JSON.stringify(options, null, 2));
+      setSubtitleOptionLabel('');
+      setSubtitleFile(null);
+      if (subtitleFileInputRef.current) subtitleFileInputRef.current.value = '';
+      notifyAction(`Uploaded and added "${label}". Add at least one more option, then save the marker.`);
+    } catch (error) {
+      notifyAction(error.message || 'Could not upload the subtitle file.', true);
+    } finally {
+      setSubtitleUploadLoading(false);
+    }
+  };
+
   // Add timeline event
   const handleAddEvent = async (e) => {
     e.preventDefault();
     if (!content.trim()) return;
 
     const totalSeconds = parseTimestampToSeconds(timestamp);
+    let variationOptions;
+    if (eventType === 'Variation Point' && variationOptionsInput.trim()) {
+      const input = variationOptionsInput.trim();
+      if (input.startsWith('[') || input.startsWith('{')) {
+        try {
+          variationOptions = JSON.parse(input);
+        } catch (_err) {
+          notifyAction('Variation options must be valid JSON.', true);
+          return;
+        }
+        if (!Array.isArray(variationOptions)) {
+          notifyAction('Variation options JSON must be an array.', true);
+          return;
+        }
+      } else {
+        variationOptions = input.split(',').map(option => option.trim()).filter(Boolean);
+      }
+    }
     const eventPayload = {
       movieId: selectedMovie,
       timestampSeconds: totalSeconds,
       timeFormatted: timestamp,
       type: eventType,
       content: content.trim(),
-      metadata: eventType === 'Variation Point' && variationOptionsInput.trim()
-        ? { variationOptions: variationOptionsInput.split(',').map(s => s.trim()).filter(Boolean) }
+      metadata: variationOptions
+        ? { variationOptions }
         : {}
     };
 
@@ -387,40 +490,6 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
     };
     reader.readAsText(file);
     e.target.value = '';
-  };
-
-  const handleLoadTemplate = () => {
-    const sample = [
-      {
-        timestampSeconds: 20,
-        timeFormatted: "00:00:20",
-        type: "Trivia",
-        content: "Matthew McConaughey stars as Cooper, a former pilot navigating a dying Earth."
-      },
-      {
-        timestampSeconds: 50,
-        timeFormatted: "00:00:50",
-        type: "Character",
-        content: "Murph, Cooper's daughter, notices anomalies in her room pointing to gravitational coordinates.",
-        metadata: { characterName: "Murph", actorName: "Mackenzie Foy" }
-      },
-      {
-        timestampSeconds: 90,
-        timeFormatted: "00:01:30",
-        type: "Glossary",
-        content: "Gargantua - A rapidly spinning supermassive black hole with a mass of 100 million suns.",
-        metadata: { term: "Gargantua" }
-      },
-      {
-        timestampSeconds: 120,
-        timeFormatted: "00:02:00",
-        type: "Variation Point",
-        content: "Audience Poll: Activate theoretical physics commentary stream by Kip Thorne?",
-        metadata: { variationOptions: ["Physics Deep Dive", "Director Story Vision"] }
-      }
-    ];
-    setJsonInput(JSON.stringify(sample, null, 2));
-    setUploadError('');
   };
 
   // ─── 403 ACCESS DENIED GUARD ───────────────────────────────────────────────
@@ -586,7 +655,7 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
           </div>
           {[
             { id: 'timeline', label: 'Timeline Markers', icon: Database, badge: events.length },
-            { id: 'dashboard', label: 'Live Dashboard', icon: BarChart3, badge: spacesList.length ? `${spacesList.length} Live` : null },
+            { id: 'dashboard', label: 'Live Dashboard', icon: BarChart3, badge: activeSpaces.length ? `${activeSpaces.length} Live` : null },
             { id: 'titles', label: 'Titles Catalog', icon: Film, badge: moviesList.length },
             { id: 'users', label: 'User Accounts', icon: Users, badge: usersList.length || null }
           ].map((item) => {
@@ -704,6 +773,9 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                 </div>
               </div>
 
+              {moviesError && <p role="alert" style={{ color: '#fca5a5' }}>Could not load catalog: {moviesError}</p>}
+              {eventsError && <p role="alert" style={{ color: '#fca5a5' }}>Could not load timeline markers: {eventsError}</p>}
+
               {/* Add New Event Form */}
               <form onSubmit={handleAddEvent} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                 <div className="admin-timeline-filter-row" style={{ display: 'grid', gridTemplateColumns: '170px 150px 1fr auto', gap: '12px', alignItems: 'flex-end' }}>
@@ -729,8 +801,9 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                       className="input-field"
                       value={timestamp}
                       onChange={(e) => setTimestamp(e.target.value)}
-                      placeholder="00:05:00"
+                      placeholder="HH:MM:SS"
                       style={{ padding: '8px' }}
+                      required
                     />
                   </div>
 
@@ -777,20 +850,61 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                   }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <label style={{ fontSize: '0.8rem', color: '#c084fc', fontWeight: 700 }}>
-                        🗳️ Pre-Approved Voting Choices (comma-separated):
+                        Approved subtitle variations:
                       </label>
                       <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
-                        Separate each choice with a comma
+                        2–4 options
                       </span>
                     </div>
-                    <input
-                      type="text"
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '8px' }}>
+                      <input
+                        className="input-field"
+                        value={subtitleOptionLabel}
+                        onChange={(e) => setSubtitleOptionLabel(e.target.value)}
+                        placeholder="Option label (e.g. Hindi subtitles)"
+                        aria-label="Subtitle variation option label"
+                      />
+                      <input
+                        className="input-field"
+                        value={subtitleLanguage}
+                        onChange={(e) => setSubtitleLanguage(e.target.value)}
+                        placeholder="Language code (e.g. hi)"
+                        aria-label="Subtitle language code"
+                        maxLength={20}
+                      />
+                      <input
+                        ref={subtitleFileInputRef}
+                        className="input-field"
+                        type="file"
+                        accept=".vtt,text/vtt"
+                        aria-label="Choose a WebVTT subtitle file"
+                        onChange={(e) => setSubtitleFile(e.target.files?.[0] || null)}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={handleUploadSubtitleOption}
+                        disabled={subtitleUploadLoading}
+                        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                      >
+                        <Upload size={14} /> {subtitleUploadLoading ? 'Uploading…' : 'Upload & add option'}
+                      </button>
+                    </div>
+                    <p style={{ margin: 0, fontSize: '0.72rem', color: '#94a3b8', lineHeight: 1.5 }}>
+                      Upload a valid WebVTT (.vtt) file for each subtitle choice. Admin uploads are validated and stored by the server; poll results display as synchronized app captions over YouTube.
+                    </p>
+                    <textarea
                       className="input-field"
                       value={variationOptionsInput}
                       onChange={(e) => setVariationOptionsInput(e.target.value)}
-                      placeholder="Director Christopher Nolan Vision, Physicist Kip Thorne Science Lore"
-                      style={{ padding: '8px 12px', borderColor: 'rgba(168, 85, 247, 0.45)' }}
+                      placeholder={'[\n  { "label": "Original audio" },\n  { "label": "Hindi subtitles" }\n]'}
+                      rows={6}
+                      required
+                      style={{ padding: '8px 12px', borderColor: 'rgba(168, 85, 247, 0.45)', fontFamily: 'var(--font-mono)', resize: 'vertical' }}
                     />
+                    <p style={{ margin: 0, fontSize: '0.72rem', color: '#94a3b8', lineHeight: 1.5 }}>
+                      Uploaded subtitle options are added here with a server-generated asset reference. Add 2–4 options total and save the marker; arbitrary subtitle URLs are not accepted.
+                    </p>
                   </div>
                 )}
               </form>
@@ -803,7 +917,9 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                 <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Triggers automatically during playback to prevent AI hallucinations</span>
               </div>
 
-              {events.length === 0 ? (
+              {eventsLoading ? (
+                <p style={{ padding: '24px', textAlign: 'center', color: '#94a3b8' }}>Loading timeline markers...</p>
+              ) : eventsError ? null : events.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '36px 12px', color: '#94a3b8' }}>
                   <Sparkles size={28} color="#a855f7" style={{ marginBottom: '8px', opacity: 0.7 }} />
                   <p style={{ margin: 0, fontSize: '0.9rem' }}>No timeline events recorded yet for this title.</p>
@@ -848,7 +964,8 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                               <div style={{ display: 'flex', gap: '6px', marginTop: '6px', flexWrap: 'wrap' }}>
                                 {ev.metadata.variationOptions.map((opt, oi) => (
                                   <span key={oi} className="badge badge-pill" style={{ fontSize: '0.72rem', background: 'rgba(139, 92, 246, 0.18)', borderColor: 'rgba(139, 92, 246, 0.35)', color: '#d8b4fe' }}>
-                                    • {opt}
+                                    • {typeof opt === 'string' ? opt : opt.label}
+                                    {typeof opt === 'object' && opt.approved && ' (asset approved)'}
                                   </span>
                                 ))}
                               </div>
@@ -885,12 +1002,12 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
             {/* Metric Tiles */}
             <div className="admin-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
               <div className="glass-card" style={{ padding: '18px' }}>
-                <div style={{ color: '#94a3b8', fontSize: '0.78rem', marginBottom: '6px' }}>Active Watch Spaces</div>
+                <div style={{ color: '#94a3b8', fontSize: '0.78rem', marginBottom: '6px' }}>Open Watch Spaces</div>
                 <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#38bdf8' }}>
-                  {spacesList.length} Live
+                {activeSpaces.length} Live
                 </div>
                 <div style={{ fontSize: '0.72rem', color: '#34d399', marginTop: '4px' }}>
-                  ● MongoDB watchspaces
+                  ● MongoDB Watch Spaces
                 </div>
               </div>
 
@@ -907,7 +1024,7 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
               <div className="glass-card" style={{ padding: '18px' }}>
                 <div style={{ color: '#94a3b8', fontSize: '0.78rem', marginBottom: '6px' }}>Registered Users</div>
                 <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#c084fc' }}>
-                  {usersList.length || '3'} Users
+                  {usersList.length} Users
                 </div>
                 <div style={{ fontSize: '0.72rem', color: '#34d399', marginTop: '4px' }}>
                   ● Single Admin RBAC
@@ -916,11 +1033,11 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
 
               <div className="glass-card" style={{ padding: '18px' }}>
                 <div style={{ color: '#94a3b8', fontSize: '0.78rem', marginBottom: '6px' }}>WebSocket Gateway</div>
-                <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#34d399' }}>
-                  Connected
+                <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#94a3b8' }}>
+                Not measured
                 </div>
-                <div style={{ fontSize: '0.72rem', color: '#34d399', marginTop: '4px' }}>
-                  Port 5000 Handshake
+                <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '4px' }}>
+                No gateway health endpoint
                 </div>
               </div>
             </div>
@@ -941,9 +1058,10 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                 </button>
               </div>
 
+              {spacesError && <p role="alert" style={{ color: '#fca5a5' }}>Could not load Watch Spaces: {spacesError}</p>}
               {spacesLoading ? (
                 <div style={{ padding: '30px', textAlign: 'center', color: '#94a3b8' }}>Loading active spaces...</div>
-              ) : spacesList.length === 0 ? (
+              ) : spacesError ? null : activeSpaces.length === 0 ? (
                 <div style={{ padding: '36px', textAlign: 'center', color: '#94a3b8' }}>
                   <Radio size={28} color="#64748b" style={{ marginBottom: '8px' }} />
                   <p style={{ margin: 0, fontSize: '0.9rem' }}>No active Watch Space sessions currently running.</p>
@@ -962,7 +1080,7 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                     </tr>
                   </thead>
                   <tbody>
-                    {spacesList.map(s => (
+                    {activeSpaces.map(s => (
                       <tr key={s.code} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                         <td style={{ padding: '12px', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#38bdf8' }}>
                           {s.code}
@@ -971,10 +1089,10 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                           {s.title}
                         </td>
                         <td style={{ padding: '12px', color: '#c084fc' }}>
-                          {s.movie?.title || 'Dune'}
+                          {s.movie?.title || 'Not specified'}
                         </td>
                         <td style={{ padding: '12px', color: '#e2e8f0' }}>
-                          {s.host?.name || 'Host'}
+                          {s.host?.name || 'Not available'}
                         </td>
                         <td style={{ padding: '12px' }}>
                           <span className="badge badge-pill">
@@ -1020,9 +1138,10 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
               </button>
             </div>
 
+            {moviesError && <p role="alert" style={{ color: '#fca5a5' }}>Could not load catalog: {moviesError}</p>}
             {moviesLoading && moviesList.length === 0 ? (
               <div style={{ padding: '36px', textAlign: 'center', color: '#94a3b8' }}>Loading catalog titles...</div>
-            ) : moviesList.length === 0 ? (
+            ) : moviesError ? null : moviesList.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '36px 12px', color: '#94a3b8' }}>
                 <Film size={28} color="#a855f7" style={{ marginBottom: '8px', opacity: 0.7 }} />
                 <p style={{ margin: 0, fontSize: '0.9rem' }}>No titles in catalog.</p>
@@ -1051,11 +1170,9 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                         border: isCurrent ? '1px solid rgba(168, 85, 247, 0.4)' : '1px solid rgba(255,255,255,0.06)' 
                       }}
                     >
-                      <img 
-                        src={movie.poster || SAMPLE_POSTERS[0].url} 
-                        alt={movie.title} 
-                        style={{ width: '64px', height: '88px', objectFit: 'cover', borderRadius: '6px' }} 
-                      />
+                      {movie.poster
+                        ? <img src={resolveAssetUrl(movie.poster)} alt={movie.title} style={{ width: '64px', height: '88px', objectFit: 'cover', borderRadius: '6px' }} />
+                        : <div aria-hidden="true" style={{ width: '64px', height: '88px', borderRadius: '6px', background: 'rgba(255,255,255,0.06)' }} />}
                       <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', flex: 1, minWidth: 0 }}>
                         <div>
                           <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#f8fafc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={movie.title}>
@@ -1119,8 +1236,11 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
               </button>
             </div>
 
+            {usersError && <p role="alert" style={{ color: '#fca5a5' }}>Could not load registered users: {usersError}</p>}
             {usersLoading ? (
               <div style={{ padding: '30px', textAlign: 'center', color: '#94a3b8' }}>Loading registered users...</div>
+            ) : usersError ? null : usersList.length === 0 ? (
+              <p style={{ padding: '24px', textAlign: 'center', color: '#94a3b8' }}>No registered users were returned by the server.</p>
             ) : (
               <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
                 <thead>
@@ -1138,11 +1258,9 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                     return (
                       <tr key={u._id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                         <td style={{ padding: '12px', fontWeight: 600, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <img 
-                            src={u.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100'} 
-                            alt={u.name} 
-                            style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover' }} 
-                          />
+                          {u.avatar
+                            ? <img src={u.avatar} alt={u.name || ''} style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover' }} />
+                            : <span aria-label={u.name || 'User'} style={{ width: '28px', height: '28px', borderRadius: '50%', display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,0.08)' }}>{u.name?.charAt(0)?.toUpperCase() || '?'}</span>}
                           {u.name}
                         </td>
                         <td style={{ padding: '12px', color: '#94a3b8' }}>{u.email}</td>
@@ -1152,7 +1270,7 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                           </span>
                         </td>
                         <td style={{ padding: '12px', color: '#64748b', fontSize: '0.78rem' }}>
-                          {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : 'Active'}
+                          {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : 'Date not available'}
                         </td>
                         <td style={{ padding: '12px', textAlign: 'right' }}>
                           {isSystemAdmin ? (
@@ -1256,21 +1374,13 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                 <Upload size={13} color="#38bdf8" /> 📁 Choose .json File
               </button>
 
-              <button
-                type="button"
-                onClick={handleLoadTemplate}
-                className="btn btn-secondary btn-sm"
-                style={{ gap: '6px', fontSize: '0.78rem' }}
-              >
-                <Sparkles size={13} color="#a855f7" /> 📋 Load Sample Markers
-              </button>
             </div>
 
             <form onSubmit={handleBulkUploadSubmit}>
               <textarea
                 value={jsonInput}
                 onChange={(e) => setJsonInput(e.target.value)}
-                placeholder={`[\n  {\n    "timestampSeconds": 180,\n    "timeFormatted": "00:03:00",\n    "type": "Trivia",\n    "content": "Frank Herbert was inspired by the sand dunes of Florence, Oregon."\n  }\n]`}
+                placeholder={`[\n  {\n    "timestampSeconds": 0,\n    "timeFormatted": "HH:MM:SS",\n    "type": "Trivia",\n    "content": "Enter verified timeline content here."\n  }\n]`}
                 rows={10}
                 className="input-field"
                 style={{
@@ -1365,7 +1475,7 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Blade Runner 2049"
+                  placeholder="Enter movie title"
                   value={newMovieTitle}
                   onChange={(e) => setNewMovieTitle(e.target.value)}
                   className="input-field"
@@ -1381,7 +1491,7 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                   </label>
                   <input
                     type="text"
-                    placeholder="2026"
+                    placeholder="Release year"
                     value={newMovieYear}
                     onChange={(e) => setNewMovieYear(e.target.value)}
                     className="input-field"
@@ -1394,7 +1504,7 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                   </label>
                   <input
                     type="text"
-                    placeholder="2h 15m"
+                    placeholder="Duration"
                     value={newMovieDuration}
                     onChange={(e) => setNewMovieDuration(e.target.value)}
                     className="input-field"
@@ -1410,7 +1520,7 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                     step="0.1"
                     min="1"
                     max="10"
-                    placeholder="8.5"
+                    placeholder="Rating"
                     value={newMovieRating}
                     onChange={(e) => setNewMovieRating(e.target.value)}
                     className="input-field"
@@ -1425,7 +1535,7 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                 </label>
                 <input
                   type="text"
-                  placeholder="Sci-Fi, Action, Thriller"
+                  placeholder="Enter genres, comma-separated"
                   value={newMovieGenres}
                   onChange={(e) => setNewMovieGenres(e.target.value)}
                   className="input-field"
@@ -1440,7 +1550,7 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. Christopher Nolan"
+                    placeholder="Director"
                     value={newMovieDirector}
                     onChange={(e) => setNewMovieDirector(e.target.value)}
                     className="input-field"
@@ -1453,7 +1563,7 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. Leonardo DiCaprio, Joseph Gordon-Levitt"
+                    placeholder="Cast members, comma-separated"
                     value={newMovieCast}
                     onChange={(e) => setNewMovieCast(e.target.value)}
                     className="input-field"
@@ -1478,88 +1588,38 @@ export default function AdminTimelineScreen({ onNavigate, currentUser, embedded 
               </div>
 
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                  <label style={{ fontSize: '0.82rem', color: '#cbd5e1', fontWeight: 600, margin: 0 }}>
-                    Poster Image URL
-                  </label>
-                  <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>Or pick a sample preset:</span>
-                </div>
+                <label style={{ display: 'block', fontSize: '0.82rem', color: '#cbd5e1', fontWeight: 600, marginBottom: '6px' }}>
+                  Poster Image File *
+                </label>
                 <input
-                  type="url"
-                  placeholder="https://.../poster.jpg"
-                  value={newMoviePoster}
-                  onChange={(e) => setNewMoviePoster(e.target.value)}
+                  ref={moviePosterInputRef}
+                  type="file"
+                  accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                  onChange={(e) => setNewMoviePosterFile(e.target.files?.[0] || null)}
                   className="input-field"
-                  style={{ width: '100%', marginBottom: '8px' }}
+                  style={{ width: '100%' }}
+                  required
                 />
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  {SAMPLE_POSTERS.map((preset, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => setNewMoviePoster(preset.url)}
-                      style={{
-                        fontSize: '0.72rem',
-                        padding: '4px 10px',
-                        borderRadius: '20px',
-                        background: newMoviePoster === preset.url ? 'rgba(168, 85, 247, 0.3)' : 'rgba(255, 255, 255, 0.05)',
-                        border: newMoviePoster === preset.url ? '1px solid #c084fc' : '1px solid rgba(255, 255, 255, 0.1)',
-                        color: newMoviePoster === preset.url ? '#f3e8ff' : '#94a3b8',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
+                <div style={{ fontSize: '0.73rem', color: '#94a3b8', marginTop: '6px' }}>
+                  JPEG, PNG, or WebP; maximum 10 MB. This image is also used as the movie backdrop.
                 </div>
               </div>
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.82rem', color: '#cbd5e1', marginBottom: '6px', fontWeight: 600 }}>
-                  Video Stream / Asset URL (Local MP4, Direct MP4, or YouTube)
+                  Movie Video File *
                 </label>
                 <input
-                  type="text"
-                  placeholder="/movies/movie.mp4 or https://.../video.mp4 or YouTube link"
-                  value={newMovieVideoUrl}
-                  onChange={(e) => setNewMovieVideoUrl(e.target.value)}
+                  ref={movieVideoInputRef}
+                  type="file"
+                  accept=".mp4,.webm,video/mp4,video/webm"
+                  onChange={(e) => setNewMovieVideoFile(e.target.files?.[0] || null)}
                   className="input-field"
                   style={{ width: '100%' }}
+                  required
                 />
-                <div style={{ display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    onClick={() => setNewMovieVideoUrl('/movies/interstellar.mp4')}
-                    style={{
-                      background: 'rgba(255,255,255,0.06)',
-                      border: '1px solid rgba(255,255,255,0.1)',
-                      borderRadius: '4px',
-                      padding: '3px 8px',
-                      fontSize: '0.72rem',
-                      color: '#c084fc',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    📁 Local: /movies/interstellar.mp4
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setNewMovieVideoUrl('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4')}
-                    style={{
-                      background: 'rgba(255,255,255,0.06)',
-                      border: '1px solid rgba(255,255,255,0.1)',
-                      borderRadius: '4px',
-                      padding: '3px 8px',
-                      fontSize: '0.72rem',
-                      color: '#38bdf8',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    🌐 Public Demo MP4
-                  </button>
-                </div>
                 <div style={{ fontSize: '0.73rem', color: '#94a3b8', marginTop: '6px' }}>
-                  💡 <strong>Tip for AI & Trivia:</strong> Local MP4 or Direct MP4 gives 100% exact second-by-second timestamps for Scene Trivia and AI Co-Pilot grounding.
+                  Upload an MP4 or WebM file (maximum 2 GB). Use only video you have permission to upload.
                 </div>
               </div>
 

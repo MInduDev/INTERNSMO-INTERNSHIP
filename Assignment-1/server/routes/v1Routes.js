@@ -5,6 +5,7 @@ const router = express.Router();
 const WatchSpace = require('../models/WatchSpace');
 const Movie = require('../models/Movie');
 const TimelineEvent = require('../models/TimelineEvent');
+const User = require('../models/User');
 const aiService = require('../services/aiService');
 const { protect } = require('../middleware/auth');
 
@@ -38,7 +39,7 @@ router.post('/watch-spaces', protect, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid AI verbosity level' });
     }
 
-    // Lookup movie by titleId or default to dune
+    // Resolve the requested catalog title; do not silently substitute another movie.
     const movie = await Movie.findOne({
       $or: [{ slug: titleId }, { _id: titleId?.match(/^[0-9a-fA-F]{24}$/) ? titleId : null }]
     });
@@ -189,6 +190,7 @@ router.post('/watch-spaces/:id/ai/ask', protect, async (req, res) => {
         }
       }
     );
+    await User.updateOne({ _id: req.user._id }, { $inc: { 'stats.aiQuestions': 1 } });
 
     res.json({
       answer: result.answer,

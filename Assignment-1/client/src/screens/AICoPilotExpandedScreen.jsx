@@ -1,10 +1,18 @@
 import React, { useState } from 'react';
 import { Sparkles, Send, ArrowLeft, MessageSquare, BookOpen, Film, HelpCircle } from 'lucide-react';
-import { aiAPI } from '../services/api';
+import { useFetch } from '../hooks/useFetch';
+import { aiAPI, spacesAPI } from '../services/api';
 
-export default function AICoPilotExpandedScreen({ onNavigate }) {
+export default function AICoPilotExpandedScreen({ onNavigate, movie, roomCode }) {
   const [messages, setMessages] = useState([]);
   const [inputVal, setInputVal] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [requestError, setRequestError] = useState('');
+  const { data: spaceData } = useFetch(
+    () => roomCode ? spacesAPI.getByCode(roomCode) : Promise.resolve(null),
+    [roomCode]
+  );
+  const currentMovie = movie || spaceData?.space?.movie;
 
   const quickQuestions = [
     'What is this place?',
@@ -21,27 +29,33 @@ export default function AICoPilotExpandedScreen({ onNavigate }) {
     const userMsg = { id: Date.now(), sender: 'user', text: q };
     setMessages(prev => [...prev, userMsg]);
     setInputVal('');
+    setRequestError('');
+    setIsLoading(true);
 
     try {
-      // Call backend AI endpoint
-      const response = await aiAPI.ask({ question: q });
-      // Expect response shape: { text, source }
+      const movieId = currentMovie?.slug || currentMovie?.id || currentMovie?._id;
+      if (!movieId) throw new Error('Select a catalog title before asking a title-specific question.');
+      const currentTimestamp = spaceData?.space?.playbackState?.currentTime;
+      const response = await aiAPI.ask({
+        movieId,
+        question: q,
+        roomCode,
+        currentTimestamp: Number.isFinite(currentTimestamp) ? currentTimestamp : 0
+      });
+      if (response?.success === false) throw new Error(response.message || 'The AI service could not answer this question.');
+      const answer = response?.answer || response?.text || response?.data?.answer || response?.data?.text;
+      if (!answer) throw new Error('The AI service returned no answer.');
       const reply = {
         id: Date.now() + 1,
         sender: 'ai',
-        text: response?.text || 'No answer returned.',
-        source: response?.source || ''
+        text: answer,
+        source: response?.source || response?.data?.source || ''
       };
       setMessages(prev => [...prev, reply]);
     } catch (err) {
-      console.warn('AI request failed:', err);
-      const fallback = {
-        id: Date.now() + 1,
-        sender: 'ai',
-        text: 'Sorry, I could not retrieve an answer.',
-        source: ''
-      };
-      setMessages(prev => [...prev, fallback]);
+      setRequestError(err.message || 'AI request failed.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -65,15 +79,12 @@ export default function AICoPilotExpandedScreen({ onNavigate }) {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <h2 style={{ fontSize: '1.4rem', fontWeight: 800 }}>AI Co-Pilot</h2>
-              <span className="badge badge-ai">● Online</span>
             </div>
             <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-              Retrieval-Augmented Timeline Engine • Grounded on Dune
+              {currentMovie?.title || 'No title selected'}
             </div>
           </div>
         </div>
-
-        <span className="badge badge-pill">Timestamp: 00:52:34</span>
       </div>
 
       {/* Main Grid: Chat History (Left) + Quick Questions (Right) */}
@@ -172,6 +183,8 @@ export default function AICoPilotExpandedScreen({ onNavigate }) {
                 )}
               </div>
             ))}
+            {isLoading && <p style={{ color: '#c084fc' }}>Waiting for the AI service…</p>}
+            {requestError && <p role="alert" style={{ color: '#fca5a5' }}>{requestError}</p>}
           </div>
 
           {/* Prompt Input Form */}
@@ -184,11 +197,13 @@ export default function AICoPilotExpandedScreen({ onNavigate }) {
               onChange={(e) => setInputVal(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSend()}
               style={{ fontSize: '0.9rem', padding: '12px 16px' }}
+              disabled={isLoading}
             />
             <button
               onClick={() => handleSend()}
               className="btn btn-ai"
               style={{ padding: '0 20px' }}
+              disabled={isLoading}
             >
               <Send size={16} />
             </button>

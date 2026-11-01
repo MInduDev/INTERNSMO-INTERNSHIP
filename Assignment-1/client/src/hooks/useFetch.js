@@ -10,12 +10,18 @@ export const useFetch = (apiCall, deps = []) => {
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setData(null);
     (async () => {
       try {
         const res = await apiCall();
         if (!cancelled) setData(res);
       } catch (e) {
-        if (!cancelled) setError(e);
+        if (!cancelled) {
+          setData(null);
+          setError(e);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }

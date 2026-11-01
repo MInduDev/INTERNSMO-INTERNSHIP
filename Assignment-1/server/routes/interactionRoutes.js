@@ -35,23 +35,33 @@ router.post('/', protect, async (req, res) => {
     if (rating !== undefined && (rating < 1 || rating > 5)) {
       return res.status(400).json({ success: false, message: 'Rating must be between 1 and 5' });
     }
+    if (watchedSeconds !== undefined && (!Number.isFinite(Number(watchedSeconds)) || Number(watchedSeconds) < 0)) {
+      return res.status(400).json({ success: false, message: 'watchedSeconds must be a non-negative number' });
+    }
 
     // Look up movie genres for genre-affinity scoring
     const movie = await Movie.findOne({ slug: sanitizeString(titleId, 100) }).lean();
     const genresWatched = movie ? movie.genres : [];
+    const previousInteraction = await Interaction.findOne({
+      userId: req.user._id,
+      titleId: sanitizeString(titleId, 100)
+    }).lean();
+    const wasCompleted = Boolean(previousInteraction?.completed);
+    const isCompleted = Boolean(completed || wasCompleted);
 
     // Upsert interaction — update if same user already has a record for this title
+    const updateFields = {
+      watchedSeconds: Number(watchedSeconds) || 0,
+      completed: isCompleted,
+      genresWatched,
+      watchSpaceCode: watchSpaceCode ? sanitizeString(watchSpaceCode, 20) : null
+    };
+    if (rating !== undefined) updateFields.rating = Number(rating);
+
     const interaction = await Interaction.findOneAndUpdate(
       { userId: req.user._id, titleId: sanitizeString(titleId, 100) },
       {
-        $set: {
-          watchedSeconds: Number(watchedSeconds) || 0,
-          completed: !!completed,
-          genresWatched,
-          watchSpaceCode: watchSpaceCode ? sanitizeString(watchSpaceCode, 20) : null
-        },
-        // Only update rating if explicitly provided
-        ...(rating !== undefined ? { $set: { rating: Number(rating) } } : {}),
+        $set: updateFields,
         // Merge co-watchers without duplicates
         $addToSet: {
           coWatchedWith: { $each: Array.isArray(coWatchedWith) ? coWatchedWith : [] }
@@ -71,7 +81,7 @@ router.post('/', protect, async (req, res) => {
 
     await require('../models/User').findByIdAndUpdate(req.user._id, {
       'stats.watchTime': `${totalHrs}h ${totalMins.toString().padStart(2, '0')}m`,
-      $inc: { 'stats.watchSpaces': completed ? 1 : 0 }
+      $inc: { 'stats.watchSpaces': isCompleted && !wasCompleted ? 1 : 0 }
     });
 
     res.status(201).json({
