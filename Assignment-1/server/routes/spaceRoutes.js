@@ -25,7 +25,6 @@ router.post('/create', protect, async (req, res) => {
     const {
       title,
       movieSlug,
-      movieTitle,
       visibility = 'Private',
       aiCoPilotLevel = 'Normal',
       sceneVotingEnabled = true,
@@ -35,6 +34,9 @@ router.post('/create', protect, async (req, res) => {
 
     if (typeof title !== 'string' || !title.trim()) {
       return res.status(400).json({ success: false, message: 'Room name is required' });
+    }
+    if (typeof movieSlug !== 'string' || !movieSlug.trim()) {
+      return res.status(400).json({ success: false, message: 'Select a movie from the catalog' });
     }
     if (!Number.isInteger(Number(maxParticipants)) || Number(maxParticipants) < 2 || Number(maxParticipants) > 50) {
       return res.status(400).json({ success: false, message: 'maxParticipants must be between 2 and 50' });
@@ -53,28 +55,17 @@ router.post('/create', protect, async (req, res) => {
     const resolvedHostAvatar = req.user.avatar || hostAvatar;
     const resolvedHostUserId = req.user._id;
 
-    // Lookup movie if slug provided
-    let movieData = {
-      slug: movieSlug || 'dune',
-      title: movieTitle || 'Dune',
-      poster: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=600&auto=format&fit=crop&q=80',
-      duration: '2h 35m',
-      durationSeconds: 9300
-    };
-
-    if (movieSlug) {
-      const foundMovie = await Movie.findOne({ slug: movieSlug });
-      if (!foundMovie) {
-        return res.status(404).json({ success: false, message: 'Selected title not found' });
-      }
-      movieData = {
-        slug: foundMovie.slug,
-        title: foundMovie.title,
-        poster: foundMovie.poster,
-        duration: foundMovie.duration,
-        durationSeconds: foundMovie.durationSeconds
-      };
+    const foundMovie = await Movie.findOne({ slug: movieSlug.trim() });
+    if (!foundMovie) {
+      return res.status(404).json({ success: false, message: 'Selected title not found' });
     }
+    const movieData = {
+      slug: foundMovie.slug,
+      title: foundMovie.title,
+      poster: foundMovie.poster,
+      duration: foundMovie.duration,
+      durationSeconds: foundMovie.durationSeconds
+    };
 
     const roomCode = generateRoomCode();
 
@@ -85,13 +76,13 @@ router.post('/create', protect, async (req, res) => {
       host: {
         userId: resolvedHostUserId,
         name: resolvedHostName,
-        avatar: resolvedHostAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80'
+        avatar: resolvedHostAvatar
       },
       participants: [
         {
           userId: resolvedHostUserId,
           name: resolvedHostName,
-          avatar: resolvedHostAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
+          avatar: resolvedHostAvatar,
           role: 'Host',
           isReady: true,
           isOnline: true
@@ -228,7 +219,7 @@ router.post('/:code/join', protect, async (req, res) => {
       space.participants.push({
         userId: req.user._id,
         name: participantName,
-        avatar: avatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80',
+        avatar,
         role: 'Viewer',
         isReady: false,
         isOnline: true

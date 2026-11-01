@@ -3,6 +3,7 @@
 // and full PRD §7.3.4 event envelope support
 const WatchSpace = require('../models/WatchSpace');
 const TimelineEvent = require('../models/TimelineEvent');
+const { isApprovedSubtitleUrl } = require('../utils/subtitleAssets');
 const { archiveSessionAnalytics } = require('./sessionAnalyticsService');
 const { socketAuthMiddleware } = require('../middleware/auth');
 const { transitionPlaybackState } = require('./playbackStateMachine');
@@ -114,7 +115,7 @@ function initSocket(io) {
           space.participants.push({
             userId: authenticatedId || undefined,
             name: currentUser.name,
-            avatar: currentUser.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
+            avatar: currentUser.avatar,
             role: 'Viewer',
             isOnline: true,
             isReady: false,
@@ -313,7 +314,7 @@ function initSocket(io) {
 
       const messageObj = {
         senderName: sender,
-        senderAvatar: participant.avatar || currentUser?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
+        senderAvatar: participant.avatar || currentUser?.avatar,
         content: cleanBody,
         isAi: false,
         timestamp: new Date()
@@ -563,7 +564,12 @@ function initSocket(io) {
             videoUrl: winningOption.videoUrl || '',
             audioUrl: winningOption.audioUrl || '',
             subtitleUrl: winningOption.subtitleUrl || '',
-            language: winningOption.language || ''
+            language: winningOption.language || '',
+            assetType: winningOption.assetType || '',
+            youtubeCaptionLanguage: winningOption.youtubeCaptionLanguage || '',
+            approved: Boolean(winningOption.approved),
+            approvedBy: winningOption.approvedBy || '',
+            approvedAt: winningOption.approvedAt || null
           }
         : null;
       await space.save();
@@ -582,7 +588,10 @@ function initSocket(io) {
           videoUrl: winningOption.videoUrl || '',
           audioUrl: winningOption.audioUrl || '',
           subtitleUrl: winningOption.subtitleUrl || '',
-          language: winningOption.language || ''
+          language: winningOption.language || '',
+          assetType: winningOption.assetType || '',
+          youtubeCaptionLanguage: winningOption.youtubeCaptionLanguage || '',
+          approved: Boolean(winningOption.approved)
         });
       }
     };
@@ -626,13 +635,14 @@ function initSocket(io) {
           const legacy = typeof option === 'string';
           const label = sanitizeMsg(legacy ? option : option?.label, 120);
           if (!label) return null;
-          const subtitleUrl = !legacy && isSafeAssetUrl(option.subtitleUrl, ['.vtt'])
+          const assetsApproved = !legacy && option.approved === true;
+          const subtitleUrl = assetsApproved && isApprovedSubtitleUrl(option.subtitleUrl)
             ? option.subtitleUrl
             : '';
-          const videoUrl = !legacy && isSafeAssetUrl(option.videoUrl, ['.mp4', '.webm', '.mkv', '.ogv'])
+          const videoUrl = assetsApproved && isSafeAssetUrl(option.videoUrl, ['.mp4', '.webm', '.mkv', '.ogv'])
             ? option.videoUrl
             : '';
-          const audioUrl = !legacy && isSafeAssetUrl(option.audioUrl, ['.mp3', '.m4a', '.aac', '.ogg', '.wav'])
+          const audioUrl = assetsApproved && isSafeAssetUrl(option.audioUrl, ['.mp3', '.m4a', '.aac', '.ogg', '.wav'])
             ? option.audioUrl
             : '';
           return {
@@ -641,7 +651,17 @@ function initSocket(io) {
             subtitleUrl,
             videoUrl,
             audioUrl,
-            language: sanitizeMsg(!legacy && option.language, 20)
+            language: sanitizeMsg(!legacy && option.language, 20),
+            assetType: sanitizeMsg(!legacy && option.assetType, 20) ||
+              (option.youtubeCaptionLanguage ? 'youtube-caption' :
+                subtitleUrl ? 'subtitle' : audioUrl ? 'audio' : videoUrl ? 'video' : ''),
+            youtubeCaptionLanguage: assetsApproved &&
+              /^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/.test(option.youtubeCaptionLanguage || '')
+              ? sanitizeMsg(option.youtubeCaptionLanguage, 20)
+              : '',
+            approved: assetsApproved,
+            approvedBy: assetsApproved ? sanitizeMsg(option.approvedBy, 100) : '',
+            approvedAt: assetsApproved ? option.approvedAt || null : null
           };
         })
         .filter(Boolean);

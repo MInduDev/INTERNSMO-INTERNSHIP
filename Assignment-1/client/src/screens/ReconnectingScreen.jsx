@@ -1,8 +1,9 @@
 import React from 'react';
 import { RefreshCw, ArrowLeft } from 'lucide-react';
+import { resolveAssetUrl } from '../services/api';
 
 export default function ReconnectingScreen({ onNavigate, movie, roomCode }) {
-  const backdrop = movie?.backdrop || 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=1200&auto=format&fit=crop&q=80';
+  const backdrop = movie?.backdrop;
 
   return (
     <div style={{
@@ -11,7 +12,9 @@ export default function ReconnectingScreen({ onNavigate, movie, roomCode }) {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundImage: `linear-gradient(180deg, rgba(7, 10, 19, 0.85) 0%, rgba(7, 10, 19, 0.98) 100%), url("${backdrop}")`,
+      backgroundImage: backdrop
+        ? `linear-gradient(180deg, rgba(7, 10, 19, 0.85) 0%, rgba(7, 10, 19, 0.98) 100%), url("${resolveAssetUrl(backdrop)}")`
+        : 'linear-gradient(135deg, #0f172a, #1e1b4b)',
       backgroundSize: 'cover',
       backgroundPosition: 'center',
       padding: '40px 20px'

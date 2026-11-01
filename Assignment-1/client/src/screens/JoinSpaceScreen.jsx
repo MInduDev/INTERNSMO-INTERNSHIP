@@ -3,7 +3,7 @@ import { Sparkles, Users, ArrowRight } from 'lucide-react';
 import { spacesAPI } from '../services/api';
 
 export default function JoinSpaceScreen({ onNavigate, onOpenCreateModal, onJoinRoom }) {
-  const [roomCode, setRoomCode] = useState('ABC123');
+  const [roomCode, setRoomCode] = useState('');
   const [isJoining, setIsJoining] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -21,7 +21,7 @@ export default function JoinSpaceScreen({ onNavigate, onOpenCreateModal, onJoinR
     try {
       const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
       const res = await spacesAPI.join(cleanCode, {
-        name: storedUser.name || 'Anonymous Viewer',
+        name: storedUser.name,
         avatar: storedUser.avatar
       });
 
@@ -94,7 +94,7 @@ export default function JoinSpaceScreen({ onNavigate, onOpenCreateModal, onJoinR
               className="input-field"
               value={roomCode}
               onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-              placeholder="e.g. ABC123"
+              placeholder="Enter the room code"
               style={{
                 textAlign: 'center',
                 fontSize: '1.3rem',

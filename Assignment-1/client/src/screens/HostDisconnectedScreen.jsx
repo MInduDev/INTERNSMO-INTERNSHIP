@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { AlertTriangle, ArrowLeft, RotateCcw, Clock } from 'lucide-react';
+import { resolveAssetUrl } from '../services/api';
 
 export default function HostDisconnectedScreen({ onNavigate, movie }) {
   const [secondsWaiting, setSecondsWaiting] = useState(14);
-  const backdrop = movie?.backdrop || 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=1200&auto=format&fit=crop&q=80';
+  const backdrop = movie?.backdrop;
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -19,7 +20,9 @@ export default function HostDisconnectedScreen({ onNavigate, movie }) {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundImage: `linear-gradient(180deg, rgba(7, 10, 19, 0.85) 0%, rgba(7, 10, 19, 0.98) 100%), url("${backdrop}")`,
+      backgroundImage: backdrop
+        ? `linear-gradient(180deg, rgba(7, 10, 19, 0.85) 0%, rgba(7, 10, 19, 0.98) 100%), url("${resolveAssetUrl(backdrop)}")`
+        : 'linear-gradient(135deg, #0f172a, #1e1b4b)',
       backgroundSize: 'cover',
       backgroundPosition: 'center',
       padding: '40px 20px'

@@ -1,18 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { X, Sparkles, Film, Users, Lock, Globe } from 'lucide-react';
 import { useFetch } from '../hooks/useFetch';
-import { moviesAPI, spacesAPI } from '../services/api';
+import { moviesAPI, resolveAssetUrl, spacesAPI } from '../services/api';
 
 export default function CreateSpaceModal({ isOpen, onClose, onCreated, movie: initialMovie, currentUser }) {
-  const { data: moviesData } = useFetch(() => moviesAPI.getAll());
+  const { data: moviesData = [], loading: moviesLoading, error: moviesError } = useFetch(() => moviesAPI.getAll());
   const movies = Array.isArray(moviesData) ? moviesData : (moviesData?.movies || []);
 
-  const [roomName, setRoomName] = useState('Friday Movie Night');
+  const [roomName, setRoomName] = useState('');
   const [selectedMovieId, setSelectedMovieId] = useState('');
   const [visibility, setVisibility] = useState('public');
   const [copilotMode, setCopilotMode] = useState('normal');
   const [sceneVoting, setSceneVoting] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
   useEffect(() => {
     if (initialMovie?.id || initialMovie?._id || initialMovie?.slug) {
@@ -24,30 +25,21 @@ export default function CreateSpaceModal({ isOpen, onClose, onCreated, movie: in
 
   if (!isOpen) return null;
 
-  const currentMovie = movies.find(m => (m.id || m._id || m.slug) === selectedMovieId) || initialMovie || movies[0] || {
-    title: 'Dune',
-    slug: 'dune',
-    year: '2024',
-    duration: '2h 46m',
-    poster: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=600&auto=format&fit=crop&q=80'
-  };
+  const currentMovie = movies.find(m => (m.id || m._id || m.slug) === selectedMovieId) || initialMovie;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!roomName.trim()) {
+      setSubmitError('Enter a name for this Watch Space.');
+      return;
+    }
+    if (!currentMovie) {
+      setSubmitError('Select a movie from the backend catalog before creating a space.');
+      return;
+    }
     setIsSubmitting(true);
+    setSubmitError('');
     try {
-      let activeUser = currentUser;
-      if (!activeUser || !activeUser.name) {
-        try {
-          activeUser = JSON.parse(localStorage.getItem('user') || '{}');
-        } catch {
-          activeUser = {};
-        }
-      }
-
-      const hostName = activeUser?.name || 'Host';
-      const hostAvatar = activeUser?.avatar;
-
       const result = await spacesAPI.create({
         title: roomName,
         movieSlug: currentMovie.slug || currentMovie.id,
@@ -55,11 +47,14 @@ export default function CreateSpaceModal({ isOpen, onClose, onCreated, movie: in
         visibility: visibility === 'public' ? 'Public' : 'Private',
         aiCoPilotLevel: copilotMode.charAt(0).toUpperCase() + copilotMode.slice(1),
         sceneVotingEnabled: sceneVoting,
-        hostName,
-        hostAvatar
+        hostName: currentUser?.name,
+        hostAvatar: currentUser?.avatar
       });
 
       const createdSpace = result?.space;
+      if (result?.success === false || !createdSpace?.code) {
+        throw new Error(result?.message || 'The server did not confirm Watch Space creation.');
+      }
       onCreated({
         name: roomName,
         visibility,
@@ -70,14 +65,7 @@ export default function CreateSpaceModal({ isOpen, onClose, onCreated, movie: in
         space: createdSpace
       });
     } catch (err) {
-      console.warn('Failed to create space on server:', err);
-      onCreated({
-        name: roomName,
-        visibility,
-        copilotMode,
-        sceneVoting,
-        movie: currentMovie
-      });
+      setSubmitError(err.message || 'Could not create the Watch Space.');
     } finally {
       setIsSubmitting(false);
     }
@@ -131,13 +119,13 @@ export default function CreateSpaceModal({ isOpen, onClose, onCreated, movie: in
           marginBottom: '20px',
           border: '1px solid rgba(255, 255, 255, 0.08)'
         }}>
-          <img
-            src={currentMovie.poster}
-            alt={currentMovie.title}
-            style={{ width: '48px', height: '64px', borderRadius: '6px', objectFit: 'cover' }}
-          />
+          {currentMovie?.poster
+            ? <img src={resolveAssetUrl(currentMovie.poster)} alt={currentMovie.title} style={{ width: '48px', height: '64px', borderRadius: '6px', objectFit: 'cover' }} />
+            : <div aria-hidden="true" style={{ width: '48px', height: '64px', display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,0.06)', borderRadius: '6px' }}><Film size={18} /></div>}
           <div style={{ flex: 1 }}>
-            {movies.length > 1 ? (
+            {moviesLoading ? (
+              <div style={{ color: '#94a3b8' }}>Loading movie catalog…</div>
+            ) : movies.length > 1 ? (
               <select
                 value={selectedMovieId}
                 onChange={(e) => setSelectedMovieId(e.target.value)}
@@ -150,11 +138,13 @@ export default function CreateSpaceModal({ isOpen, onClose, onCreated, movie: in
                   </option>
                 ))}
               </select>
-            ) : (
+            ) : currentMovie ? (
               <div style={{ fontWeight: 700, fontSize: '1rem', color: '#f8fafc' }}>{currentMovie.title}</div>
+            ) : (
+              <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#fca5a5' }}>No movie selected</div>
             )}
             <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '2px' }}>
-              {currentMovie.year} • {currentMovie.duration}
+              {[currentMovie?.year, currentMovie?.duration].filter(Boolean).join(' • ')}
             </div>
             <div style={{
               display: 'inline-block',
@@ -162,7 +152,7 @@ export default function CreateSpaceModal({ isOpen, onClose, onCreated, movie: in
               color: '#a855f7',
               marginTop: '4px'
             }}>
-              Room Name: {roomName || 'Untitled Space'}
+              Room Name: {roomName || 'Not set'}
             </div>
           </div>
         </div>
@@ -177,9 +167,15 @@ export default function CreateSpaceModal({ isOpen, onClose, onCreated, movie: in
             className="input-field"
             value={roomName}
             onChange={(e) => setRoomName(e.target.value)}
-            placeholder="e.g. Friday Movie Night"
+            placeholder="Enter a Watch Space name"
           />
         </div>
+
+        {(moviesError || submitError) && (
+          <p role="alert" style={{ color: '#fca5a5', fontSize: '0.82rem', marginBottom: '14px' }}>
+            {submitError || `Could not load movie catalog: ${moviesError.message}`}
+          </p>
+        )}
 
         {/* Visibility */}
         <div style={{ marginBottom: '18px' }}>
@@ -284,7 +280,7 @@ export default function CreateSpaceModal({ isOpen, onClose, onCreated, movie: in
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={isSubmitting}
+            disabled={isSubmitting || moviesLoading || Boolean(moviesError) || !currentMovie}
             className="btn btn-primary"
             style={{ flex: 1 }}
           >

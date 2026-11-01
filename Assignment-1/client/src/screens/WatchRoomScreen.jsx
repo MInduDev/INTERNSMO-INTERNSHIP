@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Play, Pause, Volume2, VolumeX, Maximize2, Sparkles, MessageSquare, 
+import {
+  Play, Pause, Volume2, VolumeX, Maximize2, Sparkles, MessageSquare,
   Send, Users, Radio, AlertCircle, BarChart2, CheckCircle2, ChevronRight, ThumbsUp,
   Crown, Eye, Lock, RefreshCw, Power, LogOut, UserX, X, ShieldAlert
 } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { useFetch } from '../hooks/useFetch';
-import { moviesAPI, aiAPI, spacesAPI, timelineAPI, refreshAccessToken } from '../services/api';
+import { moviesAPI, aiAPI, spacesAPI, timelineAPI, interactionsAPI, refreshAccessToken, resolveAssetUrl } from '../services/api';
+import { findVttCue, parseVtt } from '../utils/vttParser';
 
 function extractYouTubeId(url) {
   if (!url || typeof url !== 'string') return null;
@@ -28,7 +29,7 @@ function formatTime(seconds) {
 export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUser: propUser, onOpenCreateModal }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [totalTime, setTotalTime] = useState(9300); // in seconds
+  const [totalTime, setTotalTime] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
   const [activeTab, setActiveTab] = useState('ai'); // 'ai' or 'chat'
   const [showEndModal, setShowEndModal] = useState(false);
@@ -44,6 +45,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
   const [roomAccessError, setRoomAccessError] = useState('');
   const [appliedVariationNotice, setAppliedVariationNotice] = useState('');
   const [activeVariation, setActiveVariation] = useState(null);
+  const [activeSubtitleCue, setActiveSubtitleCue] = useState('');
   const [reactions, setReactions] = useState([]);
   const socketRef = useRef(null);
   const typingStopTimerRef = useRef(null);
@@ -53,6 +55,10 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
   const audioVariationRef = useRef(null);
   const youtubeContainerRef = useRef(null);
   const ytPlayerRef = useRef(null);
+  const subtitleCuesRef = useRef([]);
+  const activeSubtitleCueRef = useRef('');
+  const playbackTimeRef = useRef(0);
+  const subtitleLoadIdRef = useRef(0);
   const hostHeartbeatRef = useRef(null);
   const latencySampleRef = useRef(null);
   const pendingPingRef = useRef(null);
@@ -60,17 +66,111 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
   const isPlayingRef = useRef(isPlaying);
   const isMutedRef = useRef(isMuted);
   const [isAILoading, setIsAILoading] = useState(false);
+  const [aiError, setAiError] = useState('');
+  const [interactionSaveError, setInteractionSaveError] = useState('');
+  const lastProgressSaveRef = useRef({ movieId: null, watchedSeconds: 0, savedAt: 0 });
 
   isPlayingRef.current = isPlaying;
   isMutedRef.current = isMuted;
 
-  const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const storedUser = (() => {
+    try {
+      return JSON.parse(localStorage.getItem('user') || 'null');
+    } catch {
+      return null;
+    }
+  })();
   const activeUser = propUser || storedUser;
-  const currentUserName = activeUser.name || 'Viewer';
+  const currentUserName = activeUser?.name || '';
+
+  const updateSubtitleAtTime = (seconds) => {
+    if (Number.isFinite(seconds)) playbackTimeRef.current = seconds;
+    const activeCue = findVttCue(subtitleCuesRef.current, playbackTimeRef.current);
+    const text = activeCue?.text || '';
+    if (text !== activeSubtitleCueRef.current) {
+      activeSubtitleCueRef.current = text;
+      setActiveSubtitleCue(text);
+    }
+  };
+
+  const getCurrentPlaybackTime = () => {
+    try {
+      if (typeof ytPlayerRef.current?.getCurrentTime === 'function') {
+        return ytPlayerRef.current.getCurrentTime();
+      }
+    } catch (error) {
+      console.warn('[Subtitle Sync] Could not read YouTube playback time:', error.message);
+    }
+    const videoTime = videoRef.current?.currentTime;
+    return Number.isFinite(videoTime) ? videoTime : playbackTimeRef.current;
+  };
+
+  const applyVariation = (variation) => {
+    if (!variation?.option) return;
+    const isApproved = variation.approved === true;
+    const canApplyVideo = isApproved && Boolean(variation.videoUrl);
+    const supportsExternalTracks = canApplyVideo || isOriginalStreamDirectRef.current;
+    const canApplyAudio = isApproved && Boolean(variation.audioUrl) && supportsExternalTracks;
+    const hasUploadedSubtitle = typeof variation.subtitleUrl === 'string' &&
+      /^\/uploads\/subtitles\/[a-f0-9-]+\.vtt$/i.test(variation.subtitleUrl);
+    const canApplySubtitle = isApproved && hasUploadedSubtitle;
+    const canApplyAsset = canApplyVideo || canApplyAudio || canApplySubtitle;
+    const active = canApplyAsset ? {
+      option: variation.option,
+      optionId: variation.optionId,
+      videoUrl: canApplyVideo ? variation.videoUrl : '',
+      audioUrl: canApplyAudio ? variation.audioUrl : '',
+      subtitleUrl: canApplySubtitle ? variation.subtitleUrl : '',
+      language: variation.language || ''
+    } : null;
+    setAppliedVariationNotice(canApplyAsset
+      ? variation.option
+      : `Selected variation: ${variation.option} (no approved compatible media asset is configured)`);
+    setActiveVariation(active);
+  };
+
+  useEffect(() => {
+    const subtitleUrl = activeVariation?.subtitleUrl;
+    const loadId = ++subtitleLoadIdRef.current;
+    let disposed = false;
+    let syncTimer;
+    subtitleCuesRef.current = [];
+    updateSubtitleAtTime(getCurrentPlaybackTime());
+    if (!subtitleUrl) return () => {
+      subtitleLoadIdRef.current += 1;
+    };
+
+    const loadSubtitles = async () => {
+      try {
+        const response = await fetch(resolveAssetUrl(subtitleUrl));
+        if (!response.ok) throw new Error(`Subtitle request failed (${response.status}).`);
+        const cues = parseVtt(await response.text());
+        if (disposed || loadId !== subtitleLoadIdRef.current) return;
+        if (!cues.length) throw new Error('The subtitle file contains no usable cues.');
+        subtitleCuesRef.current = cues;
+        updateSubtitleAtTime(getCurrentPlaybackTime());
+        syncTimer = setInterval(() => {
+          updateSubtitleAtTime(getCurrentPlaybackTime());
+        }, 200);
+      } catch (error) {
+        if (disposed || loadId !== subtitleLoadIdRef.current) return;
+        console.error('[Subtitle Load Error]:', error.message);
+        setAppliedVariationNotice(`Could not load subtitles for "${activeVariation.option}".`);
+        setActiveVariation(previous => previous ? { ...previous, subtitleUrl: '' } : null);
+      }
+    };
+
+    loadSubtitles();
+    return () => {
+      disposed = true;
+      subtitleLoadIdRef.current += 1;
+      if (syncTimer) clearInterval(syncTimer);
+    };
+  }, [activeVariation?.subtitleUrl]);
 
   // Fetch space data to know room host & participants (if in a watch room)
-  const isSoloWatch = !roomCode || roomCode === 'solo' || roomCode === 'SOLO' || roomCode === 'ABC123';
-  const { data: spaceData } = useFetch(() => (!isSoloWatch && roomCode) ? spacesAPI.getByCode(roomCode) : null, [roomCode, isSoloWatch]);
+  const isSoloWatch = !roomCode || roomCode === 'solo' || roomCode === 'SOLO';
+  const { data: spaceData, loading: spaceLoading, error: spaceError } = useFetch(() => (!isSoloWatch && roomCode) ? spacesAPI.getByCode(roomCode) : null, [roomCode, isSoloWatch]);
   const space = spaceData?.space;
 
   // Initialize participants from space API if not yet received via socket
@@ -83,7 +183,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
     if (space?.host?.name) setRoomHostName(space.host.name);
     if (typeof space?.isLocked === 'boolean') setRoomLocked(space.isLocked);
   }, [space?.host?.name, space?.isLocked]);
-  const spaceHostName = roomHostName || space?.host?.name || 'Host';
+  const spaceHostName = roomHostName || space?.host?.name || '';
 
   // Check if user is Host:
   // In Solo Watch mode, or if user is an Admin, they have 100% control over playback.
@@ -105,7 +205,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
   // Viewer warning toast state
   const [viewerNotice, setViewerNotice] = useState(null);
   const showViewerWarning = () => {
-    setViewerNotice(`Playback is synchronized by Host (${spaceHostName}). Only the Host can control playback.`);
+    setViewerNotice(`Playback is synchronized by ${spaceHostName ? `Host (${spaceHostName})` : 'the Host'}. Only the Host can control playback.`);
     setTimeout(() => setViewerNotice(null), 3500);
   };
 
@@ -189,16 +289,15 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
     }, 5000);
     const syncMeasurementTimer = setInterval(() => {
       const heartbeat = hostHeartbeatRef.current;
-      if (!socket.connected || !heartbeat || isHostRef.current || latencySampleRef.current === null) return;
+      if (!socket.connected || !heartbeat || !heartbeat.isPlaying || isHostRef.current || latencySampleRef.current === null) return;
       const position = ytPlayerRef.current?.getCurrentTime
         ? ytPlayerRef.current.getCurrentTime()
         : videoRef.current?.currentTime;
       if (typeof position !== 'number' || !Number.isFinite(position)) return;
-      const elapsedSeconds = heartbeat.isPlaying
-        ? Math.max(0, (performance.now() - heartbeat.receivedAt) / 1000)
-        : 0;
+      const elapsedSeconds = Math.max(0, (performance.now() - heartbeat.receivedAt) / 1000);
+      const estimatedHostPosition = heartbeat.position + elapsedSeconds;
       socket.emit('room.sync.measurement', {
-        driftMs: (position - (heartbeat.position + elapsedSeconds)) * 1000,
+        driftMs: (position - estimatedHostPosition) * 1000,
         latencyMs: latencySampleRef.current
       });
     }, 2000);
@@ -211,6 +310,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
         setIsPlaying(hostPlaying);
         if (typeof state.playbackState.currentTime === 'number') {
           setCurrentTime(state.playbackState.currentTime);
+          updateSubtitleAtTime(state.playbackState.currentTime);
           if (ytPlayerRef.current?.seekTo) {
             try {
               ytPlayerRef.current.seekTo(state.playbackState.currentTime, true);
@@ -234,12 +334,11 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
       }
       if (Array.isArray(state.chatMessages) && state.chatMessages.length > 0) {
         setChatMessages([
-          { id: 'sys-welcome', user: 'System', text: `Welcome to Room ${roomCode}! Stream synchronized.`, time: '00:00' },
           ...state.chatMessages.map((m, idx) => ({
             id: m._id || idx,
             user: m.senderName || 'Participant',
             text: m.content,
-            time: m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '52:10'
+            time: m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : formatTime(currentTime)
           }))
         ]);
       }
@@ -250,15 +349,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
         }
       }
       if (state.currentVariation?.option) {
-        const variation = state.currentVariation;
-        const canApplyVideo = Boolean(variation.videoUrl);
-        const supportsExternalTracks = Boolean(variation.videoUrl) || isOriginalStreamDirectRef.current;
-        const canApplyAudio = Boolean(variation.audioUrl) && supportsExternalTracks;
-        const canApplySubtitle = Boolean(variation.subtitleUrl) && supportsExternalTracks;
-        setAppliedVariationNotice(canApplyVideo || canApplyAudio || canApplySubtitle
-          ? variation.option
-          : `Selected variation: ${variation.option} (no compatible media asset is configured)`);
-        setActiveVariation(canApplyVideo || canApplyAudio || canApplySubtitle ? variation : null);
+        applyVariation(state.currentVariation);
       }
     });
 
@@ -334,6 +425,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
       setIsPlaying(true);
       if (typeof position === 'number') {
         setCurrentTime(position);
+        updateSubtitleAtTime(position);
         if (ytPlayerRef.current?.seekTo) {
           try {
             ytPlayerRef.current.seekTo(position, true);
@@ -351,6 +443,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
       setIsPlaying(false);
       if (typeof position === 'number') {
         setCurrentTime(position);
+        updateSubtitleAtTime(position);
         if (ytPlayerRef.current?.pauseVideo) {
           try {
             ytPlayerRef.current.pauseVideo();
@@ -365,6 +458,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
     socket.on('sync-seek', ({ position }) => {
       if (typeof position === 'number') {
         setCurrentTime(position);
+        updateSubtitleAtTime(position);
         if (ytPlayerRef.current?.seekTo) {
           try {
             ytPlayerRef.current.seekTo(position, true);
@@ -402,6 +496,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
               videoRef.current.playbackRate = Math.abs(drift) <= 0.05 ? 1 : drift > 0 ? 1.05 : 0.95;
             }
             setCurrentTime(currentPosition);
+            updateSubtitleAtTime(currentPosition);
           }
         }
         if (typeof hostPlaying === 'boolean') {
@@ -443,24 +538,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
       }
     });
     socket.on('room.variation.applied', (variation = {}) => {
-      if (variation.option) {
-        const supportedVideo = Boolean(variation.videoUrl);
-        const supportsExternalTracks = supportedVideo || isOriginalStreamDirectRef.current;
-        const supportedAudio = Boolean(variation.audioUrl) && supportsExternalTracks;
-        const supportedSubtitle = Boolean(variation.subtitleUrl) && supportsExternalTracks;
-        const canApplyAsset = supportedVideo || supportedAudio || supportedSubtitle;
-        setAppliedVariationNotice(canApplyAsset
-          ? variation.option
-          : `Selected variation: ${variation.option} (no compatible media asset is configured)`);
-        setActiveVariation(canApplyAsset ? {
-          option: variation.option,
-          optionId: variation.optionId,
-          videoUrl: variation.videoUrl,
-          audioUrl: supportedAudio ? variation.audioUrl : '',
-          subtitleUrl: variation.subtitleUrl,
-          language: variation.language
-        } : null);
-      }
+      applyVariation(variation);
     });
     socket.on('vote-rejected', ({ message } = {}) => {
       setSelectedVoteOption(null);
@@ -480,13 +558,11 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
   }, [roomCode, currentUserName, isHost, onNavigate]);
 
   // Compute active online participants and live count dynamically
-  const activeParticipantsList = participants.length > 0
-    ? participants
-    : (space?.participants || [{ name: currentUserName, role: isHost ? 'Host' : 'Viewer', isOnline: true }]);
+  const activeParticipantsList = participants;
   const isChatMuted = Boolean(myParticipant?.isMuted);
 
   const onlineParticipants = activeParticipantsList.filter(p => p.isOnline !== false);
-  const liveCount = Math.max(onlineParticipants.length, 1);
+  const liveCount = onlineParticipants.length;
 
   // Host action: remove a participant
   const handleRemoveParticipant = (targetName) => {
@@ -549,15 +625,62 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
   };
 
   // If movie prop missing, fetch a default list
-  const { data: movies = [], loading: moviesLoading } = useFetch(() => moviesAPI.getAll());
+  const { data: movies = [], loading: moviesLoading, error: moviesError } = useFetch(() => moviesAPI.getAll());
   const moviesList = Array.isArray(movies) ? movies : (movies?.movies || []);
-  const currentMovie = movie || space?.movie || moviesList.find(m => m.slug === space?.movie?.slug || m.title === space?.movie?.title) || moviesList[0] || {
-    title: 'Interstellar',
-    slug: 'interstellar',
-    backdrop: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=1600&auto=format&fit=crop&q=80',
-    poster: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=600&auto=format&fit=crop&q=80',
-    videoAssetUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'
+  const storedSpaceMovie = typeof space?.movie === 'object' ? space.movie : null;
+  const catalogSpaceMovie = moviesList.find(m =>
+    m.slug === storedSpaceMovie?.slug ||
+    m.title === storedSpaceMovie?.title ||
+    m.title === (typeof space?.movie === 'string' ? space.movie : null)
+  );
+  const currentMovie = isSoloWatch
+    ? movie || catalogSpaceMovie || null
+    : catalogSpaceMovie || storedSpaceMovie || movie || null;
+  const movieTitle = currentMovie?.title || (typeof space?.movie === 'string' ? space.movie : null);
+  const recordPlaybackProgress = async (position, duration = totalTime, force = false) => {
+    const movieId = currentMovie?.slug;
+    if (!movieId || !Number.isFinite(position) || position <= 0) return;
+
+    const watchedSeconds = Math.floor(position);
+    const saved = lastProgressSaveRef.current;
+    const now = Date.now();
+    if (
+      !force &&
+      saved.movieId === movieId &&
+      watchedSeconds - saved.watchedSeconds < 15 &&
+      now - saved.savedAt < 15000
+    ) return;
+
+    lastProgressSaveRef.current = { movieId, watchedSeconds, savedAt: now };
+    try {
+      const result = await interactionsAPI.record({
+        titleId: movieId,
+        watchedSeconds,
+        completed: Number.isFinite(duration) && duration > 0 && position / duration >= 0.9,
+        watchSpaceCode: isSoloWatch ? undefined : roomCode
+      });
+      if (result?.success === false) throw new Error(result.message || 'The server rejected watch progress.');
+      setInteractionSaveError('');
+    } catch (error) {
+      setInteractionSaveError(`Could not save watch progress: ${error.message}`);
+    }
   };
+
+  useEffect(() => {
+    if (!isPlaying || !currentMovie?.slug) return undefined;
+    const progressTimer = setInterval(() => {
+      const position = ytPlayerRef.current?.getCurrentTime
+        ? ytPlayerRef.current.getCurrentTime()
+        : videoRef.current?.currentTime;
+      const duration = ytPlayerRef.current?.getDuration
+        ? ytPlayerRef.current.getDuration()
+        : videoRef.current?.duration;
+      if (typeof position === 'number') {
+        recordPlaybackProgress(position, typeof duration === 'number' ? duration : totalTime);
+      }
+    }, 15000);
+    return () => clearInterval(progressTimer);
+  }, [isPlaying, currentMovie?.slug, isSoloWatch, roomCode, totalTime]);
 
   const rawVideoUrl = currentMovie?.videoAssetUrl || '';
   const originalYouTubeId = extractYouTubeId(rawVideoUrl);
@@ -569,7 +692,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
     rawVideoUrl.endsWith('.mkv') ||
     rawVideoUrl.includes('google')
   ));
-  const selectedVideoUrl = activeVariation?.videoUrl || rawVideoUrl;
+  const selectedVideoUrl = resolveAssetUrl(activeVariation?.videoUrl || rawVideoUrl);
   const youtubeId = activeVariation?.videoUrl ? null : extractYouTubeId(rawVideoUrl);
   const isDirectVideo = !youtubeId && Boolean(
     selectedVideoUrl.startsWith('http') ||
@@ -630,14 +753,14 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
           videoId: youtubeId,
           playerVars: {
             autoplay: 0,
-            controls: 0,
+            controls: 1,
             rel: 0,
             modestbranding: 1,
             enablejsapi: 1,
             origin: window.location.origin,
             fs: 0,
             iv_load_policy: 3,
-            disablekb: 1,
+            disablekb: 0,
             playsinline: 1
           },
           events: {
@@ -662,7 +785,9 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
                   // Ensure player starts paused until Host starts playback
                   event.target.pauseVideo();
                 }
-              } catch (e) {}
+              } catch (error) {
+                console.warn('Could not restore YouTube player state:', error);
+              }
             },
             onStateChange: (event) => {
               // YT.PlayerState: 1 = playing, 2 = paused, 0 = ended, 3 = buffering
@@ -691,15 +816,16 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
       if (ytPlayerRef.current && typeof ytPlayerRef.current.getCurrentTime === 'function') {
         try {
           const state = ytPlayerRef.current.getPlayerState();
-          if (state === 1) { // Video is actively playing!
+          if (state === 1 || state === 2) {
             const exactSec = ytPlayerRef.current.getCurrentTime();
             setCurrentTime(Math.floor(exactSec));
+            updateSubtitleAtTime(exactSec);
             const d = Math.floor(ytPlayerRef.current.getDuration());
             if (d > 0) setTotalTime(d);
-            if (isHostRef.current && socketRef.current) {
-              socketRef.current.emit('playback-heartbeat', {
+            if (isHostRef.current) {
+              socketRef.current?.emit('playback-heartbeat', {
                 position: exactSec,
-                isPlaying: true
+                isPlaying: state === 1
               });
             }
           }
@@ -746,6 +872,13 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
     }
     const nextPlay = !isPlaying;
     setIsPlaying(nextPlay);
+    const currentPosition = ytPlayerRef.current?.getCurrentTime
+      ? ytPlayerRef.current.getCurrentTime()
+      : videoRef.current?.currentTime || 0;
+    socketRef.current?.emit('playback-heartbeat', {
+      position: currentPosition,
+      isPlaying: nextPlay
+    });
     if (youtubeId && ytPlayerRef.current) {
       try {
         if (nextPlay) {
@@ -851,23 +984,13 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
     if (!videoRef.current || youtubeId) return;
     videoRef.current.muted = isMuted;
   }, [isMuted, youtubeId]);
-  
+
   // Interactive AI Co-Pilot state
-  const [aiMessages, setAiMessages] = useState([
-    {
-      id: 1,
-      sender: 'ai',
-      text: 'AI Co-Pilot is online and synchronized with this scene. Ask any questions about characters, lore, or plot trivia!',
-      source: 'Scene 04 - Lorebase',
-      timestamp: '00:52:34'
-    }
-  ]);
+  const [aiMessages, setAiMessages] = useState([]);
   const [inputQuestion, setInputQuestion] = useState('');
 
   // Interactive Live Chat state
-  const [chatMessages, setChatMessages] = useState([
-    { id: 1, user: 'System', text: `Welcome to Room ${roomCode}! Stream synchronized.`, time: '52:10' }
-  ]);
+  const [chatMessages, setChatMessages] = useState([]);
   const [inputChat, setInputChat] = useState('');
 
   // Scene Voting Modal / Toast state
@@ -879,15 +1002,21 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
   // Active Trivia Popup state & dynamic timeline markers from database
   const [activeTrivia, setActiveTrivia] = useState(null);
   const [movieTimelineEvents, setMovieTimelineEvents] = useState([]);
+  const [timelineLoadError, setTimelineLoadError] = useState('');
   const triggeredMarkerIdsRef = useRef(new Set());
 
   // Load real indexed timeline events for this movie from MongoDB
   const fetchTimelineEvents = React.useCallback(() => {
-    const movieSlug = currentMovie?.slug || currentMovie?.id || space?.movie?.slug || 'interstellar';
+    const movieSlug = currentMovie?.slug || currentMovie?.id || space?.movie?.slug;
+    if (!movieSlug) {
+      setMovieTimelineEvents([]);
+      return;
+    }
     timelineAPI.getByMovie(movieSlug)
       .then(res => {
         const list = Array.isArray(res) ? res : (res?.events || []);
         setMovieTimelineEvents(list);
+        setTimelineLoadError('');
         if (list.length > 0 && youtubeId) {
           const maxSec = Math.max(...list.map(e => e.timestampSeconds || 0));
           if (maxSec > 0) {
@@ -895,7 +1024,9 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
           }
         }
       })
-      .catch(err => console.warn('Failed to load timeline events for watch room:', err));
+      .catch(err => {
+        setTimelineLoadError(err.message || 'Could not load timeline metadata.');
+      });
   }, [currentMovie?.slug, currentMovie?.id, space?.movie?.slug, youtubeId]);
 
   useEffect(() => {
@@ -914,8 +1045,8 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
     const socket = socketRef.current;
     if (!socket) return;
     const handleTimelineUpdated = (data) => {
-      const activeSlug = currentMovie?.slug || currentMovie?.id || space?.movie?.slug || 'interstellar';
-      if (!data?.movieId || data.movieId === activeSlug) {
+      const activeSlug = currentMovie?.slug || currentMovie?.id || space?.movie?.slug;
+      if (activeSlug && data?.movieId === activeSlug) {
         fetchTimelineEvents();
       }
     };
@@ -958,8 +1089,8 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
     });
 
     // 1. Check for Trivia / Character / Glossary overlay (tolerance: within 1s)
-    const matchedEvent = movieTimelineEvents.find(ev => 
-      Math.abs(ev.timestampSeconds - currentTime) <= 1 && 
+    const matchedEvent = movieTimelineEvents.find(ev =>
+      Math.abs(ev.timestampSeconds - currentTime) <= 1 &&
       (ev.type === 'Trivia' || ev.type === 'Character' || ev.type === 'Glossary')
     );
 
@@ -983,7 +1114,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
     }
 
     // 2. Check for Variation Point (Voting) overlay (tolerance: within 1s)
-    const matchedVariation = movieTimelineEvents.find(ev => 
+    const matchedVariation = movieTimelineEvents.find(ev =>
       Math.abs(ev.timestampSeconds - currentTime) <= 1 &&
       ev.type === 'Variation Point' &&
       Array.isArray(ev.metadata?.variationOptions) &&
@@ -1013,13 +1144,13 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
     }
     // Find closest event up to current time, or any event in the movie
     const pastEvents = movieTimelineEvents.filter(ev => ev.timestampSeconds <= currentTime);
-    const selected = pastEvents.length > 0 
-      ? pastEvents[pastEvents.length - 1] 
-      : (movieTimelineEvents[0] || {
-          type: 'Scene Trivia',
-          timeFormatted: formatTime(currentTime),
-          content: 'No custom timeline markers have been authored for this scene yet. You can import or add markers in the Admin Panel!'
-        });
+    const selected = pastEvents.length > 0
+      ? pastEvents[pastEvents.length - 1]
+      : movieTimelineEvents[0];
+    if (!selected) {
+      setChatNotice('No timeline markers are available for this title.');
+      return;
+    }
     setActiveTrivia(selected);
   };
 
@@ -1042,11 +1173,13 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
     const userMsg = { id: Date.now(), sender: 'user', text: q };
     setAiMessages(prev => [...prev, userMsg]);
     setInputQuestion('');
+    setAiError('');
     setIsAILoading(true);
 
-    const movieSlug = currentMovie?.slug || currentMovie?.id || (currentMovie?.title ? currentMovie.title.toLowerCase().replace(/[^a-z0-9]+/g, '-') : 'interstellar');
+    const movieSlug = currentMovie?.slug || currentMovie?.id;
 
     try {
+      if (!movieSlug) throw new Error('No catalog movie is associated with this Watch Space.');
       const res = await aiAPI.ask({
         movieId: movieSlug,
         currentTimestamp: currentTime,
@@ -1055,8 +1188,13 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
       });
 
       const aiData = res?.data || res;
-      const answer = aiData?.answer || aiData?.text || res?.answer || res?.text || 'No lore record available for this timestamp.';
-      const source = aiData?.source || res?.source || (aiData?.sourceEvents?.length ? `Source: ${aiData.sourceEvents[0]}` : (res?.sourceEvents?.length ? `Source: ${res.sourceEvents[0]}` : 'Timeline Lorebase'));
+      if (aiData?.success === false || res?.success === false) {
+        throw new Error(aiData?.message || res?.message || 'The AI service could not answer this question.');
+      }
+      const answer = aiData?.answer || aiData?.text || res?.answer || res?.text;
+      if (!answer) throw new Error('The AI service returned no answer for this timestamp.');
+      const sourceEvent = aiData?.sourceEvents?.[0] || res?.sourceEvents?.[0];
+      const source = aiData?.source || res?.source || (sourceEvent ? `Timeline event: ${sourceEvent}` : '');
 
       const aiReply = {
         id: Date.now() + 1,
@@ -1067,14 +1205,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
       };
       setAiMessages(prev => [...prev, aiReply]);
     } catch (err) {
-      console.warn('AI query error:', err);
-      setAiMessages(prev => [...prev, {
-        id: Date.now() + 1,
-        sender: 'ai',
-        text: 'AI Co-Pilot is currently offline. Please try again shortly.',
-        source: '',
-        timestamp: formatTime(currentTime)
-      }]);
+      setAiError(err.message || 'The AI request failed.');
     } finally {
       setIsAILoading(false);
     }
@@ -1109,22 +1240,40 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
         senderAvatar: activeUser?.avatar
       });
     } else {
-      // Fallback if running offline without active socket
-      setChatMessages(prev => [
-        ...prev,
-        {
-          id: Date.now(),
-          user: currentUserName,
-          text: cleanText,
-          time: formatTime(currentTime),
-          createdAt: Date.now()
-        }
-      ]);
+      setChatNotice('Chat is unavailable because the room server is disconnected. Your message was not sent.');
     }
   };
 
   return (
     <div className="watchroom-root">
+      {interactionSaveError && (
+        <p role="alert" style={{ padding: '8px 16px', margin: 0, background: 'rgba(239,68,68,0.12)', color: '#fca5a5' }}>
+          {interactionSaveError}
+        </p>
+      )}
+      {!isSoloWatch && (spaceError || spaceData?.success === false) && (
+        <p role="alert" style={{ padding: '8px 16px', margin: 0, background: 'rgba(239,68,68,0.12)', color: '#fca5a5' }}>
+          Could not load this Watch Space: {spaceError?.message || spaceData?.message || 'The server returned no room data.'}
+        </p>
+      )}
+      {!isSoloWatch && spaceLoading && (
+        <p style={{ padding: '8px 16px', margin: 0, color: '#94a3b8' }}>Loading Watch Space…</p>
+      )}
+      {moviesError && (
+        <p role="alert" style={{ padding: '8px 16px', margin: 0, background: 'rgba(239,68,68,0.12)', color: '#fca5a5' }}>
+          Could not load the movie catalog: {moviesError.message}
+        </p>
+      )}
+      {!currentMovie && !moviesLoading && (
+        <p role="alert" style={{ padding: '8px 16px', margin: 0, background: 'rgba(245,158,11,0.12)', color: '#fcd34d' }}>
+          No catalog movie is associated with this Watch Space. Playback and title-specific AI are unavailable until one is selected.
+        </p>
+      )}
+      {timelineLoadError && (
+        <p role="alert" style={{ padding: '8px 16px', margin: 0, background: 'rgba(239,68,68,0.12)', color: '#fca5a5' }}>
+          {timelineLoadError}
+        </p>
+      )}
       {/* Top Watch Room Nav Bar */}
       <div style={{
         display: 'flex',
@@ -1137,7 +1286,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
         flexShrink: 0
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <div 
+          <div
             onClick={() => onNavigate('home')}
             style={{ fontWeight: 800, fontSize: '1.1rem', cursor: 'pointer' }}
             title="Return to Home Dashboard"
@@ -1146,12 +1295,12 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
           </div>
           <div style={{ height: '18px', width: '1px', background: 'rgba(255,255,255,0.15)' }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span 
+            <span
               onClick={() => onNavigate('movie-details')}
               style={{ fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: '3px' }}
               title="View Movie Details"
             >
-              {currentMovie.title}
+              {movieTitle || 'Movie title unavailable'}
             </span>
             {isSoloWatch ? (
               <>
@@ -1159,7 +1308,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
                   <Play size={12} fill="#c084fc" /> Solo Watch
                 </span>
                 <span className="badge badge-pill" style={{ fontFamily: 'var(--font-mono)', letterSpacing: '0.5px' }}>
-                  1080p Full HD
+                  {currentMovie?.resolution || 'Resolution not specified'}
                 </span>
               </>
             ) : (
@@ -1350,7 +1499,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
                     style={{
                       width: '100%',
                       height: '100%',
-                      pointerEvents: 'none'
+                      pointerEvents: 'auto'
                     }}
                   />
                 </div>
@@ -1363,14 +1512,25 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
                   muted={isMuted || Boolean(activeVariation?.audioUrl)}
                   playsInline
                   onPlay={() => setIsPlaying(true)}
-                  onPause={() => setIsPlaying(false)}
+                  onPause={(e) => {
+                    setIsPlaying(false);
+                    if (isHost) {
+                      socketRef.current?.emit('playback-heartbeat', {
+                        position: e.currentTarget.currentTime,
+                        isPlaying: false
+                      });
+                    }
+                    recordPlaybackProgress(e.currentTarget.currentTime, e.currentTarget.duration, true);
+                  }}
                   onTimeUpdate={(e) => {
+                    updateSubtitleAtTime(e.currentTarget.currentTime);
                     if (audioVariationRef.current && Math.abs(audioVariationRef.current.currentTime - e.target.currentTime) > 0.75) {
                       audioVariationRef.current.currentTime = e.target.currentTime;
                     }
                     if (isHost && !e.target.paused) {
                       setCurrentTime(Math.floor(e.target.currentTime));
                     }
+                    recordPlaybackProgress(e.target.currentTime, e.target.duration);
                   }}
                   onLoadedMetadata={(e) => {
                     if (e.target.duration && !isNaN(e.target.duration)) {
@@ -1396,29 +1556,53 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
                     zIndex: 1
                   }}
                 >
-                  {activeVariation?.subtitleUrl && (
-                    <track
-                      kind="subtitles"
-                      src={activeVariation.subtitleUrl}
-                      srcLang={activeVariation.language || 'en'}
-                      label={activeVariation.language || 'Selected variation'}
-                      default
-                      onLoad={(event) => {
-                        event.currentTarget.track.mode = 'showing';
-                      }}
-                    />
-                  )}
                 </video>
               ) : (
-                /* 3. Backdrop fallback when no video file is provided */
                 <div style={{
                   position: 'absolute',
                   inset: 0,
-                  backgroundImage: `linear-gradient(180deg, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.6) 100%), url("${currentMovie.backdrop || currentMovie.poster}")`,
+                  backgroundImage: currentMovie?.backdrop || currentMovie?.poster
+                    ? `linear-gradient(180deg, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.6) 100%), url("${resolveAssetUrl(currentMovie.backdrop || currentMovie.poster)}")`
+                    : 'linear-gradient(135deg, #0f172a, #1e1b4b)',
                   backgroundSize: 'cover',
                   backgroundPosition: 'center',
-                  zIndex: 1
-                }} />
+                  zIndex: 1,
+                  display: 'grid',
+                  placeItems: 'center',
+                  color: '#cbd5e1'
+                }}>
+                  {!currentMovie?.videoAssetUrl && (
+                    <p style={{ padding: '16px', background: 'rgba(0,0,0,0.65)', borderRadius: '8px' }}>
+                      No playable media asset is configured for this catalog title.
+                    </p>
+                  )}
+                </div>
+              )}
+              {activeVariation?.subtitleUrl && activeSubtitleCue && (
+                <span
+                  aria-live="polite"
+                  style={{
+                    position: 'absolute',
+                    left: '8%',
+                    right: '8%',
+                    bottom: '56px',
+                    zIndex: 4,
+                    display: 'block',
+                    padding: '8px 14px',
+                    borderRadius: '6px',
+                    background: 'rgba(0, 0, 0, 0.78)',
+                    color: '#fff',
+                    fontSize: 'clamp(16px, 2.2vw, 26px)',
+                    fontWeight: 600,
+                    lineHeight: 1.35,
+                    textAlign: 'center',
+                    whiteSpace: 'pre-line',
+                    textShadow: '0 1px 3px rgba(0, 0, 0, 0.9)',
+                    pointerEvents: 'none'
+                  }}
+                >
+                  {activeSubtitleCue}
+                </span>
               )}
               {isDirectVideo && activeVariation?.audioUrl && (
                 <audio
@@ -1433,7 +1617,6 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
                   style={{ display: 'none' }}
                 />
               )}
-
               {/* Click anywhere on video to toggle Play/Pause */}
               <div
                 onClick={() => {
@@ -1443,7 +1626,8 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
                   position: 'absolute',
                   inset: 0,
                   zIndex: 3,
-                  cursor: 'pointer'
+                  cursor: 'pointer',
+                  pointerEvents: youtubeId ? 'none' : 'auto'
                 }}
                 title={isPlaying ? 'Click to Pause' : 'Click to Play'}
               />
@@ -1512,7 +1696,9 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
                 color: '#a7f3d0',
                 fontSize: '0.8rem'
               }}>
-                Active variation: {appliedVariationNotice}
+                {appliedVariationNotice.startsWith('Poll result:')
+                  ? appliedVariationNotice
+                  : `Active variation: ${appliedVariationNotice}`}
               </div>
             )}
 
@@ -1575,9 +1761,9 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
                             setSelectedVoteOption(key);
                             setVoteTallies(prev => ({ ...prev, [key]: (prev[key] || 0) + 1 }));
                             if (socketRef.current) {
-                              socketRef.current.emit('cast-variation-vote', { 
-                                option: key, 
-                                voterName: currentUserName 
+                              socketRef.current.emit('cast-variation-vote', {
+                                option: key,
+                                voterName: currentUserName
                               });
                             }
                           }}
@@ -1651,7 +1837,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
                   alignItems: 'center',
                   gap: '12px',
                   zIndex: 12,
-                  pointerEvents: 'auto'
+                  pointerEvents: youtubeId ? 'none' : 'auto'
                 }}
               >
                 <button
@@ -1701,7 +1887,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
                 zIndex: 15
               }}>
                 <Pause size={14} color="#38bdf8" />
-                <span>Paused by Host ({spaceHostName})</span>
+                <span>Paused by {spaceHostName ? `Host (${spaceHostName})` : 'Host'}</span>
               </div>
             )}
           </div>
@@ -1778,7 +1964,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 {!isHost && !isSoloWatch && (
                   <span style={{ fontSize: '0.72rem', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    ● Synced with Host ({spaceHostName})
+                    ● Synced with {spaceHostName ? `Host (${spaceHostName})` : 'Host'}
                   </span>
                 )}
                 <span style={{ fontSize: '0.8rem', color: '#cbd5e1', fontFamily: 'var(--font-mono)', minWidth: '110px' }}>
@@ -2065,6 +2251,7 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
                     </div>
                   </div>
                 )}
+                {aiError && <p role="alert" style={{ color: '#fca5a5', fontSize: '0.8rem' }}>{aiError}</p>}
                 <div ref={aiEndRef} />
               </div>
 
@@ -2155,15 +2342,15 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
                   )}
                   <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     {chatMessages.map((msg) => {
-                      const isMsgHost = msg.user.toLowerCase().includes('host') || 
+                      const isMsgHost = msg.user.toLowerCase().includes('host') ||
                                        (spaceHostName && msg.user.toLowerCase().includes(spaceHostName.toLowerCase().split(' ')[0]));
                       const isMsgSystem = msg.user.toLowerCase() === 'system';
                       return (
                         <div key={msg.id} style={{ background: 'rgba(255,255,255,0.03)', padding: '8px 12px', borderRadius: '8px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '3px' }}>
-                            <span style={{ 
-                              fontWeight: 700, 
-                              color: isMsgSystem ? '#c084fc' : (isMsgHost ? '#ff2a54' : '#38bdf8') 
+                            <span style={{
+                              fontWeight: 700,
+                              color: isMsgSystem ? '#c084fc' : (isMsgHost ? '#ff2a54' : '#38bdf8')
                             }}>
                               {msg.user} {isMsgHost && !isMsgSystem && '👑'}
                             </span>
@@ -2426,17 +2613,9 @@ export default function WatchRoomScreen({ onNavigate, roomCode, movie, currentUs
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                       <div style={{ position: 'relative' }}>
-                        <img
-                          src={p.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80'}
-                          alt={p.name}
-                          style={{
-                            width: '36px',
-                            height: '36px',
-                            borderRadius: '50%',
-                            objectFit: 'cover',
-                            border: isParticipantHost ? '2px solid #f59e0b' : '2px solid rgba(255,255,255,0.1)'
-                          }}
-                        />
+                        {p.avatar
+                          ? <img src={p.avatar} alt={p.name || ''} style={{ width: '36px', height: '36px', borderRadius: '50%', objectFit: 'cover', border: isParticipantHost ? '2px solid #f59e0b' : '2px solid rgba(255,255,255,0.1)' }} />
+                          : <div aria-label={p.name || 'Participant'} style={{ width: '36px', height: '36px', borderRadius: '50%', display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,0.08)', border: isParticipantHost ? '2px solid #f59e0b' : '2px solid rgba(255,255,255,0.1)' }}>{p.name?.charAt(0)?.toUpperCase() || '?'}</div>}
                         <span style={{
                           position: 'absolute',
                           bottom: '-1px',
