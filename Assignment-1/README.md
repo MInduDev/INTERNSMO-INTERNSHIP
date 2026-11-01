@@ -72,8 +72,9 @@ configured environment.
 
 The backend checks include `npm run test:auth`, `npm run test:socket`,
 `npm run test:playback`, `npm run test:ai`, `npm run test:ai-provider`,
-`npm run test:analytics`, and `npm run test:recommendation` from the `server`
-directory.
+`npm run test:analytics`, `npm run test:recommendation`, `npm run test:variations`,
+`npm run test:subtitle-upload`, and `npm run test:movie-upload` from the `server`
+directory. The client includes `npm run test:vtt` for its WebVTT parser.
 `npm run test:api` checks a running local API; set `TEST_API_URL`,
 `TEST_EMAIL`, and `TEST_PASSWORD` to include the authenticated room-create,
 refresh, AI, analytics, and cleanup workflow. The full workflow needs a running
@@ -145,12 +146,15 @@ client-supplied role or display name.
   sync-drift and ping RTT samples; session analytics reports measured p95
   values and whether the observed drift sample set is below 250 ms. This
   instrumentation alone does not prove a cross-network SLA.
-- Hosts can vote on admin-authored variation options. Variation metadata may
-  include `id`, `label`, `videoUrl` (direct MP4/WebM/MKV/OGV), `audioUrl`
-  (MP3/M4A/AAC/OGG/WAV), `subtitleUrl` (WebVTT), and `language`. Winning
-  options are persisted and broadcast; supported assets are applied by the
-  HTML5 player. Alternate audio and subtitle tracks require a direct HTML5
-  video source. Legacy string options remain voteable but do not switch assets.
+- Hosts can vote on admin-authored variation options. Admins upload WebVTT
+  files through the timeline screen; the server validates and stores them under
+  a generated filename. Only uploaded subtitle references can be attached to a
+  variation option. The winning approved subtitle is parsed and synchronized
+  with playback as an app caption overlay over both direct HTML5 videos and
+  YouTube embeds. This does not alter YouTube's native CC selection. Alternate
+  video/audio options keep their existing formats, and alternate audio requires
+  a direct HTML5 video source.
+  Legacy string options remain voteable but do not switch assets.
 - AI questions and source event IDs are retained for analytics (up to 500
   questions per room). Sync measurements are capped at 1,000 per room.
 - `npm run evaluate:recommendations -- <judgments.json>` from `server`
@@ -234,6 +238,12 @@ Admin and Host permissions must be enforced on the server.
 - Title-specific timeline data.
 
 The project uses self-created/sample content.
+
+Admins add catalog titles from the Admin Timeline screen by uploading a JPEG,
+PNG, or WebP poster (maximum 10 MB) and an MP4 or WebM movie file (maximum 2
+GB). The poster is also used as the backdrop. Files are stored under
+`server/uploads/movies` and served by the backend; catalog creation no longer
+accepts poster or movie URLs.
 
 ### Watch Space
 A Watch Space is a synchronized group viewing room.
@@ -352,6 +362,27 @@ Examples:
 - Minor optional narrative branch.
 
 The AI does not generate new video, audio, or plot branches during playback.
+
+### Uploading subtitle variations
+
+1. In the Admin Timeline screen, create a `Variation Point`.
+2. Enter each subtitle option label and language code, choose a `.vtt` file,
+   and select **Upload & add option**. Repeat for each subtitle language.
+3. Add a second or more option (2–4 total), then save the timeline marker.
+4. Open the marker's vote in a Watch Space. The winning uploaded VTT appears as
+   an app caption overlay synchronized to playback; native YouTube CC is not
+   controlled by the app. Turn native CC off in the YouTube player if it is
+   also enabled to avoid duplicate captions.
+
+`server/examples/subtitles/english.vtt` and `server/examples/subtitles/hindi.vtt`
+are self-authored examples for upload testing. Their cues are illustrative;
+replace them with cues timed to the video. To verify the live flow, start the
+backend and frontend, sign in as an admin, upload both example files as two
+options, save the marker, then open the same Watch Space in two browser
+sessions. Vote from the viewer session and confirm that the winning caption
+appears in both sessions and advances with playback. This two-session check
+must be performed manually; automated tests cover VTT parsing and server vote
+payloads but do not simulate browser playback.
 
 ### Voting Flow
 

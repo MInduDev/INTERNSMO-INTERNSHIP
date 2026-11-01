@@ -65,12 +65,16 @@ provider-backed generative AI demo.
 
 ### Variation vote and subtitle/localization
 
-1. The seed variation choices are plain labels; they do not contain media or
-   subtitle assets. Add an admin-authored variation with a valid reachable
-   `.vtt` URL (and required direct video source for external tracks).
+1. In the Admin Timeline screen, author a Variation Point with 2–4 JSON option
+   objects. Add a reachable, permitted `.vtt` URL (and a direct HTML5 video
+   source for external tracks). The admin-only API stamps media options as
+   approved; the client cannot self-approve assets.
 2. Open the vote as Host, cast different participant votes, then capture the
-   result and asset applied by each browser.
-3. Verify both clients render the same winning variation. Do not use
+   result and asset applied by each browser. Video options switch the video;
+   audio options switch the synchronized audio track; subtitle options load
+   WebVTT subtitles.
+3. Verify both clients render the same approved winning variation, including
+   a viewer who joins after it has been selected. Do not use
    copyrighted media/subtitles unless you have permission to do so.
 
 ### Recommendations, tests, and RBAC

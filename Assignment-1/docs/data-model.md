@@ -33,7 +33,17 @@ WatchSpace.code ──> Analytics.spaceCode
 - Room capacity: 2–50; AI co-pilot level: `Minimal`, `Normal`, `Chatty`.
 - Timeline types: `Trivia`, `Character`, `Glossary`, `Variation Point`.
 - A variation point accepts 2–4 pre-authored options. Asset metadata can
-  include `id`, `label`, `videoUrl`, `audioUrl`, `subtitleUrl`, and `language`.
+  include `id`, `label`, `assetType`, `videoUrl`, `audioUrl`, `subtitleUrl`,
+  `youtubeCaptionLanguage`, and `language`. A YouTube caption variation
+  identifies the poll's preferred existing YouTube track by language code.
+  Viewers manually select that language in the YouTube CC menu; the app does
+  not switch native captions or store/inject an external VTT file.
+  Media URLs are accepted only through admin-protected timeline authoring and
+  receive server-side `approved`, `approvedBy`, and `approvedAt` metadata.
+  Socket voting strips media URLs without that approval stamp. Legacy labels
+  remain voteable but cannot switch media.
+- A room's `currentVariation` records the selected track URLs and their
+  approval metadata so newly joined viewers can apply the same variation.
 - Stored room question history is capped at 500 and sync samples at 1,000.
 
 ## Seed data

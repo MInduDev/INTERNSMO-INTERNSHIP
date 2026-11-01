@@ -37,8 +37,22 @@ hour; refresh tokens last seven days.
 | `POST /api/timeline/upload-json` | Admin | `{ movieId, events: [{ timestampSeconds?, timeFormatted?, type?, content, metadata? }] }` | `201` with inserted events/count. |
 
 Timeline event types are `Trivia`, `Character`, `Glossary`, and
-`Variation Point`. Variation assets, if provided, must be HTTP(S) or local
-absolute paths with allowed media suffixes; subtitle assets use `.vtt`.
+`Variation Point`. Variation options may be strings for label-only polls, or
+objects such as `{ "id": "en", "label": "English subtitles",
+"subtitleUrl": "<authorized VTT URL>", "language": "en" }`, or a YouTube
+caption option such as `{ "id": "en", "label": "English captions",
+"assetType": "youtube-caption", "youtubeCaptionLanguage": "en" }`. Asset suffixes are
+restricted to `.mp4`, `.webm`, `.mkv`, or `.ogv` for video; `.mp3`, `.m4a`,
+`.aac`, `.ogg`, or `.wav` for audio; and `.vtt` for subtitles. URLs must be
+HTTP(S) URLs or local absolute paths. On the admin-protected create and bulk
+upload routes, options with assets are stamped with server-side approval
+metadata (`approved`, `approvedBy`, `approvedAt`); client-supplied approval
+fields are ignored. The socket service does not distribute unapproved assets.
+YouTube caption options represent a viewer preference for a language already
+offered by that video. Clients do not programmatically change YouTube's native
+caption selection; each viewer selects the poll winner from the embedded
+player's CC menu. Options do not inject external VTT files or change the
+video's native caption catalog.
 
 ## Watch Spaces
 
@@ -147,7 +161,7 @@ event; “socket” means it is sent only to the requesting/affected connection.
 | `room.variation.voteOpen` | Room; PRD envelope | `{ "event": "room.variation.voteOpen", "watchSpaceId": "ABC123", "payload": { "variationId": "evt_var_01", "question": "Choose an option", "options": [], "votes": {}, "closesAt": 1700000030000 }, "ts": 1700000000000 }` |
 | `variation-votes-updated` | Room | `{ "votes": { "opt-1": 1, "opt-2": 0 }, "optionVoted": "opt-1" }` |
 | `room.variation.voteClose` | Room | `{ "roomCode": "ABC123", "closedAt": 1700000030000, "winningOption": {}, "votes": { "opt-1": 1 } }` |
-| `room.variation.applied` | Room, when there is a winner | `{ "variationId": "evt_var_01", "option": "English subtitles", "optionId": "opt-1", "videoUrl": "", "audioUrl": "", "subtitleUrl": "/captions/en.vtt", "language": "en" }` |
+| `room.variation.applied` | Room, when there is a winner | `{ "variationId": "evt_var_01", "option": "English captions", "optionId": "en", "videoUrl": "", "audioUrl": "", "subtitleUrl": "", "youtubeCaptionLanguage": "en", "language": "en" }` |
 | `vote-rejected` | Requesting socket | `{ "message": "This variation vote is closed." }` |
 | `error` | Requesting socket | `{ "message": "Only the Host can control playback" }` |
 | `timeline-events-updated` | All connected sockets (admin timeline REST routes) | `{ "movieId": "dune", "event": {}, "action": "create" }`; delete uses `{ "movieId": "dune", "eventId": "event-id", "action": "delete" }`; bulk import uses `{ "movieId": "dune", "count": 2, "action": "bulk-import" }`. |

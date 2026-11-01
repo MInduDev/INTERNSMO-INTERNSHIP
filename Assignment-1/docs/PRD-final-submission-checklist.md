@@ -24,7 +24,8 @@ for implementation details and evidence limitations.
 - [ ] Record independent authenticated browser profiles synchronizing play, pause, seek, and reconnect with the approved demo video.
 - [x] Set the submission AI scope to timeline-only, retrieval-grounded Q&A; do not claim provider-backed generation.
 - [x] Capture local chat, timeline-only API answer with source event ID, and trivia; the answer is not an in-app AI screenshot and seeded timeline/video alignment needs correction.
-- [x] Capture a variation vote; seeded options have no assets, so a subtitle/media switch remains outstanding.
+- [x] Capture a variation vote; seeded options are label-only.
+- [ ] Capture an admin-authored, approved video/audio/subtitle variation applied by two clients.
 - [x] Capture the local recommendation screen; representative interaction-based quality evaluation remains outstanding.
 - [x] Capture local analytics and an HTTP 403 for a Host-role attempt at an admin-only API action.
 - [x] Add an automated assertion that a Viewer playback-control socket event is rejected without changing room state or broadcasting.

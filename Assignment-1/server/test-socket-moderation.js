@@ -1,4 +1,20 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const {
+  SUBTITLE_DIRECTORY,
+  SUBTITLE_URL_PREFIX
+} = require('./utils/subtitleAssets');
+const subtitleFilename = `${crypto.randomUUID()}.vtt`;
+fs.mkdirSync(SUBTITLE_DIRECTORY, { recursive: true });
+fs.writeFileSync(path.join(SUBTITLE_DIRECTORY, subtitleFilename), [
+  'WEBVTT',
+  '',
+  '00:00:01.000 --> 00:00:02.500',
+  'A sample subtitle cue.',
+  ''
+].join('\n'));
 
 const space = {
   code: 'ROOM1',
@@ -87,12 +103,28 @@ require.cache[timelinePath] = {
             movieId: 'test-movie',
             metadata: {
               variationOptions: [
-                { id: 'director', label: 'Option A', videoUrl: 'https://cdn.example/a.mp4' },
-                { id: 'alternate', label: 'Option B', subtitleUrl: 'https://cdn.example/b.vtt', language: 'en' }
+                { id: 'director', label: 'Option A', videoUrl: 'https://cdn.example/a.mp4', approved: true },
+                {
+                  id: 'alternate',
+                  label: 'Option B',
+                  subtitleUrl: `${SUBTITLE_URL_PREFIX}${subtitleFilename}`,
+                  language: 'en',
+                  approved: true
+                }
               ]
             }
           }
-        : null
+        : sourceId === 'variation-unapproved'
+          ? {
+              movieId: 'test-movie',
+              metadata: {
+                variationOptions: [
+                  { id: 'unapproved', label: 'Unapproved asset', videoUrl: 'https://cdn.example/unapproved.mp4' },
+                  { id: 'label-only', label: 'Label only' }
+                ]
+              }
+            }
+          : null
     })
   }
 };
@@ -263,8 +295,22 @@ async function run() {
   await host.clientEmit('cast-variation-vote', { option: 'opt-2' });
   await viewer.clientEmit('room.variation.voteClose');
   assert.equal(space.currentVariation.option, 'Option B');
-  assert.equal(space.currentVariation.subtitleUrl, 'https://cdn.example/b.vtt');
+  assert.equal(space.currentVariation.subtitleUrl, `${SUBTITLE_URL_PREFIX}${subtitleFilename}`);
+  assert.equal(space.currentVariation.approved, true);
   assert.equal(viewer.outgoing.some(event => event.event === 'room.variation.applied'), true);
+  assert.equal(viewer.outgoing.filter(event => event.event === 'room.variation.applied').at(-1).payload.approved, true);
+
+  await viewer.clientEmit('room.variation.voteOpen', {
+    variationId: 'variation-unapproved',
+    question: 'Choose a variation',
+    durationSeconds: 30
+  });
+  assert.equal(space.activeVariationVote.variationId, 'variation-unapproved');
+  await host.clientEmit('cast-variation-vote', { option: 'opt-1' });
+  await viewer.clientEmit('room.variation.voteClose');
+  assert.equal(space.currentVariation.option, 'Unapproved asset');
+  assert.equal(space.currentVariation.videoUrl, '');
+  assert.equal(space.currentVariation.approved, false);
 
   await viewer.clientEmit('room.sync.measurement', { driftMs: 120, latencyMs: 30 });
   assert.equal(space.analytics.syncSamples.length, 1);
@@ -288,4 +334,6 @@ async function run() {
 run().catch(error => {
   console.error(error);
   process.exitCode = 1;
+}).finally(() => {
+  fs.unlinkSync(path.join(SUBTITLE_DIRECTORY, subtitleFilename));
 });
