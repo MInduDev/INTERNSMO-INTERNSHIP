@@ -1,0 +1,24 @@
+{
+  "runAt": "2026-10-30T14:42:37.084Z",
+  "test": "Live provider-backed AIService latency",
+  "mode": "direct service call; local MongoDB timeline retrieval plus configured external LLM; excludes HTTP route/auth overhead",
+  "sampleTarget": 30,
+  "completedSamples": 1,
+  "successfulSamples": 0,
+  "failedSamples": 1,
+  "providerHost": "api.openai.com",
+  "concurrency": 1,
+  "warmupSamples": 0,
+  "timelineTitleSlug": "interstellar",
+  "timelineEventCount": 13,
+  "latenciesMs": [],
+  "citationValidSamples": 0,
+  "errors": [
+    {
+      "sample": 1,
+      "error": "LLM provider request failed (429): {\n    \"error\": {\n        \"message\": \"You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/.\",\n        \"type\": \"insufficient_quot"
+    }
+  ],
+  "limitation": "Single local environment; one timeline title and repeated fixed prompt; provider/model/network dependent.",
+  "elapsedRunMs": 1725.73
+}

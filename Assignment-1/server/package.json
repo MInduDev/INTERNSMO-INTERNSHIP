@@ -1,0 +1,45 @@
+{
+  "name": "watchspace-backend",
+  "version": "1.0.0",
+  "description": "Node.js and Express backend for WatchSpace AI with MongoDB, Socket.IO, and a timeline-based AI Co-Pilot",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "nodemon server.js",
+    "dev": "nodemon server.js",
+    "watch": "node --watch server.js",
+    "seed": "node seed/seedData.js",
+    "test:auth": "node test-auth-security.js",
+    "test:analytics": "node test-session-analytics.js",
+    "test:socket": "node test-socket-moderation.js",
+    "test:playback": "node test-playback-state-machine.js",
+    "test:ai": "node test-ai-grounding.js",
+    "test:ai-provider": "node test-ai-provider.js",
+    "test:recommendation": "node test-recommendation-scoring.js",
+    "evaluate:recommendations": "node evaluate-recommendations.js",
+    "test:api": "node test-backend.js",
+    "test": "node test-backend.js"
+  },
+  "keywords": [
+    "nodejs",
+    "express",
+    "mongodb",
+    "socket.io",
+    "netflix-clone",
+    "watchspace-ai"
+  ],
+  "author": "Antigravity",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.9.2",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "runAt": "2026-10-30T14:48:01.443Z",
+  "test": "Local timeline-only AI service latency",
+  "titleSlug": "interstellar",
+  "timelineEventsForTitle": 13,
+  "providerMode": "timeline-extract; external provider disabled in process",
+  "warmupSamples": 10,
+  "measuredSamples": 100,
+  "concurrency": 1,
+  "p50Ms": 1.17,
+  "p95Ms": 3.03,
+  "maxMs": 3.75,
+  "successfulGroundedResponses": 100,
+  "citationsPresent": 100,
+  "limitation": "Measures local timeline retrieval and deterministic answer formatting only; excludes HTTP/auth and is not provider-backed AI latency."
+}

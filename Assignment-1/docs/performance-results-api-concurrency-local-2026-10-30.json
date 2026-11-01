@@ -1,0 +1,132 @@
+{
+  "runAt": "2026-10-30T14:49:25.543Z",
+  "test": "Local loopback HTTP concurrency benchmark",
+  "host": "same Windows machine; local MongoDB",
+  "warmupRequests": 10,
+  "measuredRequestsPerEndpointPerConcurrency": 100,
+  "concurrencyLevels": [
+    1,
+    5,
+    10
+  ],
+  "results": [
+    {
+      "endpoint": "/api/health",
+      "concurrency": 1,
+      "measuredRequests": 100,
+      "statusCounts": {
+        "200": 100
+      },
+      "p50Ms": 0.79,
+      "p95Ms": 1.82,
+      "maxMs": 3.12,
+      "meanResponseBytes": 111,
+      "allHttp200": true
+    },
+    {
+      "endpoint": "/api/health",
+      "concurrency": 5,
+      "measuredRequests": 100,
+      "statusCounts": {
+        "200": 100
+      },
+      "p50Ms": 1.8,
+      "p95Ms": 5.63,
+      "maxMs": 8.1,
+      "meanResponseBytes": 111,
+      "allHttp200": true
+    },
+    {
+      "endpoint": "/api/health",
+      "concurrency": 10,
+      "measuredRequests": 100,
+      "statusCounts": {
+        "200": 100
+      },
+      "p50Ms": 4.04,
+      "p95Ms": 11.19,
+      "maxMs": 12.56,
+      "meanResponseBytes": 111,
+      "allHttp200": true
+    },
+    {
+      "endpoint": "/api/movies",
+      "concurrency": 1,
+      "measuredRequests": 100,
+      "statusCounts": {
+        "200": 100
+      },
+      "p50Ms": 2.23,
+      "p95Ms": 4.62,
+      "maxMs": 12.28,
+      "meanResponseBytes": 862,
+      "allHttp200": true
+    },
+    {
+      "endpoint": "/api/movies",
+      "concurrency": 5,
+      "measuredRequests": 100,
+      "statusCounts": {
+        "200": 100
+      },
+      "p50Ms": 5.7,
+      "p95Ms": 13.24,
+      "maxMs": 15.42,
+      "meanResponseBytes": 862,
+      "allHttp200": true
+    },
+    {
+      "endpoint": "/api/movies",
+      "concurrency": 10,
+      "measuredRequests": 100,
+      "statusCounts": {
+        "200": 100
+      },
+      "p50Ms": 12.33,
+      "p95Ms": 15.87,
+      "maxMs": 26.09,
+      "meanResponseBytes": 862,
+      "allHttp200": true
+    },
+    {
+      "endpoint": "/api/timeline/interstellar",
+      "concurrency": 1,
+      "measuredRequests": 100,
+      "statusCounts": {
+        "200": 100
+      },
+      "p50Ms": 2.38,
+      "p95Ms": 4.52,
+      "maxMs": 5.47,
+      "meanResponseBytes": 5502,
+      "allHttp200": true
+    },
+    {
+      "endpoint": "/api/timeline/interstellar",
+      "concurrency": 5,
+      "measuredRequests": 100,
+      "statusCounts": {
+        "200": 100
+      },
+      "p50Ms": 8.09,
+      "p95Ms": 13.34,
+      "maxMs": 20.93,
+      "meanResponseBytes": 5502,
+      "allHttp200": true
+    },
+    {
+      "endpoint": "/api/timeline/interstellar",
+      "concurrency": 10,
+      "measuredRequests": 100,
+      "statusCounts": {
+        "200": 100
+      },
+      "p50Ms": 14.19,
+      "p95Ms": 24.49,
+      "maxMs": 33,
+      "meanResponseBytes": 5502,
+      "allHttp200": true
+    }
+  ],
+  "limitation": "One local process/database; sparse data; concurrent client requests on one machine; not remote or production capacity."
+}

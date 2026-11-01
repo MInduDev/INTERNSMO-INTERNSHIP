@@ -1,0 +1,17 @@
+{
+  "watch": [
+    "server.js",
+    "routes",
+    "models",
+    "middleware",
+    "services",
+    "config"
+  ],
+  "ext": "js,json",
+  "ignore": [
+    "node_modules",
+    "package-lock.json",
+    "seed"
+  ],
+  "delay": "500"
+}

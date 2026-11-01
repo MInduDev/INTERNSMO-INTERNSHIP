@@ -1,0 +1,32 @@
+{
+  "runAt": "2026-10-30T14:51:50.306Z",
+  "test": "Two simultaneous local Socket.IO rooms",
+  "topology": {
+    "concurrentRooms": 2,
+    "hostClients": 2,
+    "viewerClients": 2,
+    "totalClients": 4
+  },
+  "heartbeatCountPerRoom": 20,
+  "results": [
+    {
+      "roomIndex": 1,
+      "requestedHeartbeats": 20,
+      "deliveredSamples": 20,
+      "p50Ms": 4.54,
+      "p95Ms": 7.98,
+      "maxMs": 8.55,
+      "targetMs": 500
+    },
+    {
+      "roomIndex": 2,
+      "requestedHeartbeats": 20,
+      "deliveredSamples": 20,
+      "p50Ms": 4.33,
+      "p95Ms": 7.13,
+      "maxMs": 8.5,
+      "targetMs": 500
+    }
+  ],
+  "limitations": "Functional two-room local isolation/load smoke only; not design capacity, multi-network, real browsers, or playback drift."
+}

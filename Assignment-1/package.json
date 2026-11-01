@@ -1,0 +1,22 @@
+{
+  "name": "watchspace-ai-root",
+  "version": "1.0.0",
+  "description": "Full-stack WatchSpace AI - Synchronized Watch Party & AI Co-Pilot",
+  "scripts": {
+    "server": "npm start --prefix server",
+    "server:dev": "npm run dev --prefix server",
+    "server:seed": "npm run seed --prefix server",
+    "server:test": "npm test --prefix server",
+    "client": "npm run dev --prefix client",
+    "client:build": "npm run build --prefix client"
+  },
+  "keywords": [
+    "watchspace",
+    "netflix-clone",
+    "mern",
+    "socket.io",
+    "ai-copilot"
+  ],
+  "author": "",
+  "license": "ISC"
+}

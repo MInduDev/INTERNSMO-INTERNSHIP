@@ -1,0 +1,20 @@
+{
+  "runAt": "2026-10-30T14:48:58.943Z",
+  "test": "Local Socket.IO host heartbeat to viewer delivery latency",
+  "topology": {
+    "rooms": 1,
+    "hostClients": 1,
+    "viewerClients": 2,
+    "totalClients": 3
+  },
+  "requestedHeartbeats": 40,
+  "deliveredSamples": 80,
+  "p50Ms": 5.11,
+  "p95Ms": 7.46,
+  "maxMs": 37.32,
+  "targetMs": 500,
+  "targetMet": true,
+  "concurrency": 1,
+  "transport": "Socket.IO local loopback; websocket with polling fallback",
+  "limitations": "Measures server heartbeat to client event delivery only; not media playback drift, real browsers, cross-network conditions, multi-room load or design capacity."
+}

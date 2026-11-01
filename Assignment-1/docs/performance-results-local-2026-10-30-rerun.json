@@ -1,0 +1,48 @@
+{
+  "runAt": "2026-10-30T14:40:03.073Z",
+  "test": "Local loopback HTTP latency; sequential requests, response body fully read",
+  "baseUrl": "http://127.0.0.1:5000",
+  "host": "same Windows machine; local MongoDB",
+  "results": [
+    {
+      "endpoint": "/api/health",
+      "warmupCount": 10,
+      "measuredRequests": 100,
+      "concurrency": 1,
+      "statusCounts": {
+        "200": 100
+      },
+      "p50Ms": 0.86,
+      "p95Ms": 2.75,
+      "maxMs": 5.68,
+      "meanResponseBytes": 112
+    },
+    {
+      "endpoint": "/api/movies",
+      "warmupCount": 10,
+      "measuredRequests": 100,
+      "concurrency": 1,
+      "statusCounts": {
+        "200": 100
+      },
+      "p50Ms": 3.29,
+      "p95Ms": 5.89,
+      "maxMs": 7.47,
+      "meanResponseBytes": 862
+    },
+    {
+      "endpoint": "/api/timeline/dune",
+      "warmupCount": 10,
+      "measuredRequests": 100,
+      "concurrency": 1,
+      "statusCounts": {
+        "200": 100
+      },
+      "p50Ms": 2.72,
+      "p95Ms": 5.52,
+      "maxMs": 9.44,
+      "meanResponseBytes": 38
+    }
+  ],
+  "limitation": "Sparse local database; no concurrent load, remote network, deployment, or representative data-volume claim."
+}
